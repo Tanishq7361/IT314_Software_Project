@@ -412,21 +412,59 @@ export default function PublicPortalPage() {
         {/* DM Operations Layer (only activates if session.dm === true) */}
         {session?.dm && <LiveOperationsLayer mapRef={mapRef} />}
 
-        {/* Map Header Status Banner */}
-        <div className="absolute top-2 left-2 sm:top-3 sm:left-3 z-[500] bg-slate-900/90 backdrop-blur border border-slate-700 rounded-xl px-2.5 py-1.5 sm:px-3 sm:py-2 text-white shadow-xl max-w-[calc(100vw-16px)] sm:max-w-sm pointer-events-auto">
-          <div className="flex items-center gap-2 text-xs">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-            <span className="font-bold text-sky-300">Live Public Disaster Map</span>
-          </div>
-          <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5">
-            <span className="font-semibold text-slate-200">{visibleIncidents.length}</span> verified public incidents
-            <span className="hidden sm:inline"> displayed · Auto-refreshes every 30s</span>
-          </div>
-          {error && (
-            <div className="mt-1.5 text-[10px] sm:text-[11px] text-red-300 bg-red-950/80 px-2 py-1 rounded border border-red-800">
-              ⚠️ {error}
+        {/* Top Controls Container (Unified Flex Layout to Prevent Any Overlap) */}
+        <div className="absolute top-2 left-2 right-2 sm:top-3 sm:left-3 sm:right-3 z-[500] flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 pointer-events-none">
+          {/* Status Banner */}
+          <div className="bg-slate-900/90 backdrop-blur border border-slate-700 rounded-xl px-2.5 py-1.5 sm:px-3 sm:py-2 text-white shadow-xl max-w-sm pointer-events-auto">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span className="font-bold text-sky-300">Live Public Disaster Map</span>
             </div>
-          )}
+            <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5">
+              <span className="font-semibold text-slate-200">{visibleIncidents.length}</span> verified public incidents
+              <span className="hidden sm:inline"> displayed · Auto-refreshes every 30s</span>
+            </div>
+            {error && (
+              <div className="mt-1.5 text-[10px] sm:text-[11px] text-red-300 bg-red-950/80 px-2 py-1 rounded border border-red-800">
+                ⚠️ {error}
+              </div>
+            )}
+          </div>
+
+          {/* Layer Controls: Basemap & Alerts Layer Toggle */}
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pointer-events-auto self-start sm:self-auto">
+            <button
+              onClick={() => setShowAlertsLayer(!showAlertsLayer)}
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl text-xs font-semibold shadow-xl border transition flex items-center gap-1.5 ${
+                showAlertsLayer
+                  ? "bg-amber-600 text-white border-amber-400 shadow-amber-900/40"
+                  : "bg-slate-900/90 text-slate-400 border-slate-700 hover:text-white"
+              }`}
+              title="Toggle Early Warning Alerts map layer (SRS S2-11)"
+            >
+              <span>⚠️</span>
+              <span>Alerts: {showAlertsLayer ? "ON" : "OFF"}</span>
+            </button>
+
+            <div className="bg-slate-900/90 backdrop-blur border border-slate-700 rounded-xl p-0.5 sm:p-1 text-xs text-white shadow-xl flex gap-1">
+              <button
+                onClick={() => setActiveBaseLayer("streets")}
+                className={`px-2 sm:px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                  activeBaseLayer === "streets" ? "bg-sky-600 text-white font-bold" : "text-slate-400 hover:text-white"
+                }`}
+              >
+                Streets
+              </button>
+              <button
+                onClick={() => setActiveBaseLayer("humanitarian")}
+                className={`px-2 sm:px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                  activeBaseLayer === "humanitarian" ? "bg-sky-600 text-white font-bold" : "text-slate-400 hover:text-white"
+                }`}
+              >
+                Humanitarian
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Coordinates indicator (desktop only to prevent mobile overlap) */}
@@ -456,7 +494,7 @@ export default function PublicPortalPage() {
           <div
             className={`${
               showMobileLegend ? "block" : "hidden"
-            } sm:block bg-slate-900/90 backdrop-blur border border-slate-700 rounded-xl p-3 text-white shadow-xl w-48 max-h-[60vh] overflow-y-auto`}
+            } sm:block bg-slate-900/90 backdrop-blur border border-slate-700 rounded-xl p-3 text-white shadow-xl w-48 max-h-[50vh] overflow-y-auto`}
           >
             <label htmlFor="district-filter" className="block text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1">
               District
@@ -491,41 +529,6 @@ export default function PublicPortalPage() {
                 <span>Early Warnings {showAlertsLayer ? "(On)" : "(Off)"}</span>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Layer Controls: Basemap & Alerts Layer Toggle */}
-        <div className="absolute top-14 left-2 sm:top-3 sm:right-3 sm:left-auto z-[500] flex flex-wrap items-center gap-1.5 sm:gap-2 pointer-events-auto">
-          <button
-            onClick={() => setShowAlertsLayer(!showAlertsLayer)}
-            className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl text-xs font-semibold shadow-xl border transition flex items-center gap-1.5 ${
-              showAlertsLayer
-                ? "bg-amber-600 text-white border-amber-400 shadow-amber-900/40"
-                : "bg-slate-900/90 text-slate-400 border-slate-700 hover:text-white"
-            }`}
-            title="Toggle Early Warning Alerts map layer (SRS S2-11)"
-          >
-            <span>⚠️</span>
-            <span>Alerts: {showAlertsLayer ? "ON" : "OFF"}</span>
-          </button>
-
-          <div className="bg-slate-900/90 backdrop-blur border border-slate-700 rounded-xl p-0.5 sm:p-1 text-xs text-white shadow-xl flex gap-1">
-            <button
-              onClick={() => setActiveBaseLayer("streets")}
-              className={`px-2 sm:px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                activeBaseLayer === "streets" ? "bg-sky-600 text-white font-bold" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Streets
-            </button>
-            <button
-              onClick={() => setActiveBaseLayer("humanitarian")}
-              className={`px-2 sm:px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                activeBaseLayer === "humanitarian" ? "bg-sky-600 text-white font-bold" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Humanitarian
-            </button>
           </div>
         </div>
 
