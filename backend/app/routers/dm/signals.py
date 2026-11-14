@@ -15,6 +15,7 @@ from app.auth import DMUser, Principal, _deny
 from app.common import Rationale, Scenario, next_incident_ref, scenario_db
 from app.errors import ApiError, conflict, not_found
 from app.geo import district_for, is_in_gujarat
+from app.services.signal_matching import find_related_signals
 
 router = APIRouter()
 
@@ -49,6 +50,20 @@ def list_signals(
             """,
             {"status": status, "limit": limit},
         ).fetchall()
+
+
+@router.get("/signals/related")
+def related_signals(
+    principal: DMUser,
+    signal_id: uuid.UUID | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+):
+    """Advisory, read-only suggestions of pending signals that may describe the same event.
+
+    Heuristic ranking (docs/signal-matching.md); never promotes, dismisses, merges or dispatches anything.
+    """
+    with db.transaction() as conn:
+        return find_related_signals(conn, signal_id=signal_id, limit=limit)
 
 
 class PromoteRequest(BaseModel):

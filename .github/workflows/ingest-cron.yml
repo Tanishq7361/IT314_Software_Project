@@ -9,6 +9,9 @@ concurrency:
   group: ingest-cron
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   trigger:
     name: Wake Backend & Trigger Ingest
@@ -17,11 +20,11 @@ jobs:
     steps:
       - name: Wake backend, then trigger ingest
         env:
-          BASE: ${{ secrets.STAGING_BACKEND_URL }}
+          BASE: ${{ secrets.PROD_BACKEND_URL }}
           TOKEN: ${{ secrets.INGEST_TOKEN }}
         run: |
           if [ -z "$BASE" ] || [ -z "$TOKEN" ]; then
-            echo '::warning::secrets STAGING_BACKEND_URL or INGEST_TOKEN missing';
+            echo '::warning::secrets PROD_BACKEND_URL or INGEST_TOKEN missing';
             exit 0;
           fi
 
@@ -36,11 +39,11 @@ jobs:
           done
 
           echo "Triggering /api/v1/internal/ingest/run..."
-          code=$(curl -s -o out.json -w '%{http_code}' --max-time 60 \
+          code=$(curl -s -o out.json -w '%{http_code}' --max-time 180 \
             -X POST \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
-            "$BASE/api/v1/internal/ingest/run")
+            "$BASE/api/v1/internal/ingest/run" || echo "000")
 
           echo "HTTP $code" >> $GITHUB_STEP_SUMMARY
           cat out.json || true

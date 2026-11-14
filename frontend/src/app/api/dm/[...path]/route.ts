@@ -48,12 +48,14 @@ async function forward(request: NextRequest, ctx: RouteContext<"/api/dm/[...path
 
   let upstream: Response;
   try {
-    const isMultipart = request.headers.get("content-type")?.includes("multipart/form-data");
+    // JSON and form text pass as text; everything else (photos, multipart) must stay binary or it is corrupted.
+    const contentType = request.headers.get("content-type") ?? "";
+    const isText = contentType === "" || contentType.includes("json") || contentType.startsWith("text/");
     const body = ["GET", "HEAD"].includes(request.method)
       ? undefined
-      : isMultipart
-        ? await request.arrayBuffer()
-        : await request.text();
+      : isText
+        ? await request.text()
+        : await request.arrayBuffer();
     upstream = await fetch(target, {
       method: request.method,
       headers,
@@ -65,11 +67,16 @@ async function forward(request: NextRequest, ctx: RouteContext<"/api/dm/[...path
     return error(503, "BACKEND_UNAVAILABLE", "The operations service is unreachable. Try again shortly.");
   }
 
-  const body = upstream.status === 204 ? null : await upstream.text();
-  return new Response(body, {
-    status: upstream.status,
-    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
-  });
+  // Bytes, not text: evidence photos for moderators are binary and must pass through unchanged.
+  const responseHeaders: Record<string, string> = {
+    "content-type": upstream.headers.get("content-type") ?? "application/json",
+  };
+  for (const name of ["x-content-type-options", "cache-control", "content-security-policy"]) {
+    const value = upstream.headers.get(name);
+    if (value) responseHeaders[name] = value;
+  }
+  const body = upstream.status === 204 ? null : await upstream.arrayBuffer();
+  return new Response(body, { status: upstream.status, headers: responseHeaders });
 }
 
 export const GET = forward;

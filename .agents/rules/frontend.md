@@ -10,6 +10,8 @@ description: Load when creating or modifying frontend pages, React components, h
   - Page routes live in `frontend/src/app/`; reusable components in `frontend/src/components/`.
 - **Reusable Component First:**
   - Inspect `frontend/src/components/ui.tsx` for core UI primitives (Button, Card, Input, Modal, Badge).
+  - Use `frontend/src/components/Brand.tsx` (`SiteHeader`, `NavLink`, `Logo`) for page headers and the logo; do not hand-roll headers or use emoji logos. Logo assets live in `frontend/public/logo*.svg`.
+  - Keep `body` scrollable; only full-screen app views (map, `/dm`) use the `.app-screen` class.
   - Inspect `frontend/src/components/badges.tsx` for status and severity indicators.
   - Inspect `frontend/src/components/dm/LiveOperationsLayer.tsx` for Leaflet GIS maps.
 - **State Management & Context:**

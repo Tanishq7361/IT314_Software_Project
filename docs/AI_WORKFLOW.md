@@ -8,17 +8,15 @@ This document describes the AI-assisted software engineering environment for **R
 
 ---
 
-## 1. Core Engineering Invariants (All Modes)
+## 1. Shared Rules (All Modes)
 
-Regardless of the tool used, all AI-generated code and architecture plans must adhere to DRCH standards:
+Every mode and tool follows the same rules, which live in one place so they are not repeated here:
 
-1. **Database:** Neon PostgreSQL 16 with PostGIS. Strictly no Supabase Auth, `auth.users`, `auth.uid()`, or Supabase-specific triggers.
-2. **Authentication & RBAC:** Application-managed authentication using Argon2id password hashing, TOTP MFA, and session revocation.
-3. **Audit Trail:** Append-only SHA-256 hash-chained audit logging with trigger-enforced immutability.
-4. **AI Boundaries:** AI recommendations are strictly advisory (`triage_results`). Human dispatcher approval is required for incident verification, dispatch, escalation, and closure.
-5. **Disaster Scope:** Exactly 3 disaster scenarios (`cyclone`, `industrial_fire`, `urban_flooding`).
-6. **Privacy:** Protect reporter PII. Public incident coordinates truncated to 4 decimal places.
-7. **Git Safety:** AI tools are **strictly prohibited** from running `git commit`, `git push`, `git merge`, `git reset`, or rewriting Git history.
+- `AGENTS.md`: engineering rules, DRCH technical constraints (database, auth, audit, AI boundaries, scope, privacy), git restrictions, and the commit, pull request and issue conventions.
+- `.agents/rules/*.md`: topic detail for architecture, backend and database, frontend, and security.
+- `.github/PULL_REQUEST_TEMPLATE.md` and `.github/ISSUE_TEMPLATE/*.yml`: the required PR and issue formats.
+
+AI tools never run `git commit`, `git push`, `git merge`, `git reset`, `git clean` or `git rebase`, and never rewrite history. They draft commit messages, PR descriptions and issues for a human to submit.
 
 ---
 
@@ -28,7 +26,7 @@ Use Google Antigravity directly for feature development, bug fixes, refactoring,
 
 ### Configuration Structure
 ```text
-├── AGENTS.md                  # Concise global instructions loaded on every turn
+├── AGENTS.md                  # Shared rules for every agent, loaded on every turn
 └── .agents/
     └── rules/
         ├── architecture.md     # Loaded on system architecture & API changes
@@ -49,9 +47,9 @@ Use Anthropic's Claude Code CLI directly in your terminal, authenticated via you
 
 ### Configuration Structure
 ```text
-├── CLAUDE.md                  # Imports @AGENTS.md and defines common dev commands
+├── CLAUDE.md                  # Imports @AGENTS.md; adds Claude Code specific rules only
 └── .claude/
-    ├── settings.json          # Explicit deny permissions for mutating Git commands
+    ├── settings.json          # Deny permissions for mutating git and gh commands
     └── skills/                # Reusable slash commands
         ├── implement-feature/ # /implement-feature <description>
         ├── code-review/       # /code-review
@@ -75,7 +73,7 @@ Use the pre-configured skills inside the Claude Code session:
 /security-audit
 ```
 
-All destructive git operations (`git commit`, `git push`, `git reset`, `git merge`, `gh pr merge`) are blocked by `.claude/settings.json`.
+Mutating git operations (`git commit`, `git push`, `git reset`, `git merge`, `git rebase`, `git clean`) and all `gh` commands are blocked by `.claude/settings.json`.
 
 ---
 
@@ -175,5 +173,5 @@ python -m pytest .ai/pipeline/tests/ -v
 
 - Runtime output directories (`.ai/tasks/`, `.ai/reports/`, `.ai/handoffs/`) are ignored by `.gitignore` and created on demand.
 - Local developer settings (`.claude/settings.local.json`, `.agents/settings.local.json`) are ignored.
-- Repository configuration files (`AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `.claude/skills/`, `.agents/rules/`, `scripts/ai-dev.py`) remain tracked in Git for team-wide use.
+- Repository configuration files (`AGENTS.md`, `CLAUDE.md`, `.claude/settings.json`, `.claude/skills/`, `.agents/rules/`, `.github/` templates, `scripts/ai-dev.py`) remain tracked in Git for team-wide use.
 

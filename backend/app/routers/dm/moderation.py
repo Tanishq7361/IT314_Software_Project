@@ -8,7 +8,7 @@ Removed = REJECTED. Decision history (actor, time, reason) is in the audit log.
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 from app import audit, db
@@ -37,6 +37,7 @@ def moderation_queue(principal: Moderator):
                    e.file_name, e.mime_type, e.size_bytes, e.sha256, e.scan_state, e.uploaded_at,
                    EXTRACT(EPOCH FROM (now() - e.uploaded_at))::bigint AS age_seconds,
                    u.full_name AS uploaded_by_name,
+                   EXISTS (SELECT 1 FROM evidence_blobs b WHERE b.evidence_id = e.evidence_id) AS has_preview,
                    (SELECT l.rationale FROM audit_logs l
                      WHERE l.entity_type = 'evidence' AND l.entity_id = e.evidence_id
                      ORDER BY l.audit_id DESC LIMIT 1) AS last_reason
@@ -56,9 +57,44 @@ def moderation_queue(principal: Moderator):
         "backlog": {"count": len(items), "oldest_age_seconds": oldest},
         "notes": [
             "No automated scanner is connected; items stay Pending until a moderator decides.",
-            "File previews are unavailable because no evidence storage service is configured.",
+            "Open a photo with View photo before deciding; each view is recorded in the audit log.",
         ],
     }
+
+
+@router.get("/moderation/{item_id}/content")
+def moderation_content(item_id: uuid.UUID, principal: Moderator):
+    """Return the uploaded image so a moderator can review it. Removed items have no content (404)."""
+    with db.transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT e.mime_type, e.incident_id, b.content
+            FROM evidence_files e JOIN evidence_blobs b ON b.evidence_id = e.evidence_id
+            WHERE e.evidence_id = %s AND e.scan_state <> 'REJECTED'
+            """,
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise not_found("Evidence")
+        # Citizen photos can show people and homes: record who looked at which one.
+        audit.record(
+            conn,
+            actor=principal,
+            action="EVIDENCE_VIEWED",
+            entity_type="evidence",
+            entity_id=item_id,
+            after={"incident_id": str(row["incident_id"])},
+            ip=principal.ip,
+        )
+    return Response(
+        content=bytes(row["content"]),
+        media_type=row["mime_type"],
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+            "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+        },
+    )
 
 
 class ModerationDecision(BaseModel):

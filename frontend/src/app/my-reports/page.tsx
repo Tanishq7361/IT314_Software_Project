@@ -1,8 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { SiteHeader, NavLink } from "@/components/Brand";
 import Link from "next/link";
-import { fetchMyReports, replyToInformationRequest, ReportData } from "@/services/citizenApi";
+import { latestInformationRequest, REPLY_MAX_LENGTH, REPLY_MIN_LENGTH } from "@/components/citizen/InformationRequestReply";
+import { fetchMyReports, replyToInformationRequest, requestWithdrawal, ReportData } from "@/services/citizenApi";
+import { ReportPhotos } from "@/components/ReportPhotos";
+import { isInGujarat } from "@/lib/geo";
 
 const STATUS_CONFIG: Record<
   string,
@@ -72,6 +76,10 @@ export default function MyReportsPage() {
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyError, setReplyError] = useState<{ id: string; message: string } | null>(null);
   const [replySuccess, setReplySuccess] = useState<string | null>(null);
+  const [replyPlace, setReplyPlace] = useState<Record<string, { latitude: number; longitude: number } | undefined>>({});
+  const [withdrawing, setWithdrawing] = useState<string | null>(null);
+  const [withdrawError, setWithdrawError] = useState<{ id: string; message: string } | null>(null);
+  const [placeError, setPlaceError] = useState<{ id: string; message: string } | null>(null);
 
   const loadReports = useCallback(async () => {
     try {
@@ -125,37 +133,17 @@ export default function MyReportsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-y-auto">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* Header */}
-      <header className="min-h-16 bg-slate-900 border-b border-slate-800 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 sticky top-0 z-20">
-        <div className="flex items-center gap-2 sm:gap-3">
-          <Link href="/" className="flex items-center gap-2 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 rounded-lg p-1 transition">
-            <span className="text-xl" aria-hidden="true">🛡️</span>
-            <span className="font-bold text-white text-base tracking-wide">ResQ Gujarat</span>
-          </Link>
-          <span className="text-slate-600 hidden sm:inline">/</span>
-          <span className="text-[11px] sm:text-xs uppercase tracking-wider font-semibold text-sky-400 bg-sky-400/10 px-2 py-0.5 rounded border border-sky-400/20">
-            My Incident Reports
-          </span>
-        </div>
-
-        <nav aria-label="Incident tracking navigation" className="flex items-center gap-2 sm:gap-4 flex-wrap">
-          <div aria-live="polite" className="text-[11px] text-slate-400 font-mono hidden md:flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" aria-hidden="true" />
-            Auto-refreshes every 15s • Updated {lastRefreshed ? lastRefreshed.toLocaleTimeString() : "…"}
-          </div>
-          <Link
-            href="/report"
-            className="min-h-[44px] bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-md shadow-sky-600/30 transition flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-          >
-            <span aria-hidden="true">+</span>
-            <span>Report Incident</span>
-          </Link>
-          <Link href="/citizen/dashboard" className="inline-flex min-h-[44px] items-center text-xs text-slate-300 hover:text-white px-2 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 transition">
-            Dashboard
-          </Link>
-        </nav>
-      </header>
+      <SiteHeader subtitle="My Incident Reports" maxWidth="max-w-5xl">
+        <span aria-live="polite" className="hidden items-center gap-1.5 font-mono text-[11px] text-sky-200/80 xl:flex">
+          <span aria-hidden="true" className="size-1.5 animate-ping rounded-full bg-emerald-400" />
+          Auto-refresh 15s · {lastRefreshed ? lastRefreshed.toLocaleTimeString() : "…"}
+        </span>
+        <NavLink href="/report" variant="primary">+ Report<span className="hidden sm:inline"> Incident</span></NavLink>
+        <NavLink href="/citizen/dashboard" hideBelow="sm">Dashboard</NavLink>
+        <NavLink href="/account" hideBelow="sm">Account</NavLink>
+      </SiteHeader>
 
       {/* Main Content */}
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 md:p-8">
@@ -238,6 +226,9 @@ export default function MyReportsPage() {
               const currentStatus = report.status || report.verification_status || "SUBMITTED";
               const statusInfo = getStatusInfo(currentStatus);
               const isSelected = selectedReport?.id === report.id;
+              const informationRequest = latestInformationRequest(report.timeline);
+              const replyLength = (replyText[report.id] || "").trim().length;
+              const hasReplyLocation = Boolean(replyPlace[report.id]);
 
               return (
                 <div
@@ -287,40 +278,49 @@ export default function MyReportsPage() {
 
                   {/* Citizen Information Response Form (SRS S2-13) */}
                   {currentStatus === "NEEDS_INFORMATION" && (
-                    <div className="mb-5 p-4 rounded-xl border border-orange-700/60 bg-orange-950/40 text-orange-200">
+                    <section aria-label="Reply to the information request" className="mb-5 p-4 rounded-xl border border-orange-700/60 bg-orange-950/40 text-orange-200">
                       <div className="flex items-center gap-2 mb-2 font-bold text-xs text-orange-300">
                         <span aria-hidden="true">⚠️</span>
                         <span>Action Required: Command Center requested additional information</span>
                       </div>
-                      <p className="text-xs text-orange-200/90 mb-3">
-                        Please clarify situation details, stranded counts, or nearby landmarks to assist response dispatchers.
-                      </p>
+                      {informationRequest ? (
+                        <blockquote className="mb-3 rounded-lg border border-orange-800/70 bg-slate-950/60 px-3 py-2 text-xs text-orange-100">
+                          <span className="sr-only">Dispatcher asked: </span>
+                          {informationRequest}
+                        </blockquote>
+                      ) : (
+                        <p className="text-xs text-orange-200/90 mb-3">
+                          Please clarify situation details, stranded counts, or nearby landmarks to assist response dispatchers.
+                        </p>
+                      )}
                       {replySuccess === report.id ? (
                         <div role="status" aria-live="polite" className="text-xs text-emerald-400 font-semibold py-1">
-                          ✓ Your response has been submitted to dispatchers.
+                          ✓ Your reply was sent. The report is back in the verification queue.
                         </div>
                       ) : (
                         <form
                           onSubmit={async (e) => {
                             e.preventDefault();
                             const text = replyText[report.id]?.trim();
-                            if (!text || text.length < 3) return;
+                            const place = replyPlace[report.id];
+                            if ((!text || text.length < 3) && !place) return;
                             setReplyingId(report.id);
                             setReplyError(null);
-                            const res = await replyToInformationRequest(report.id, text);
+                            const res = await replyToInformationRequest(report.id, text && text.length >= 3 ? text : undefined, place);
                             setReplyingId(null);
                             if (res.error) {
                               setReplyError({ id: report.id, message: res.error });
                             } else {
                               setReplySuccess(report.id);
                               setReplyText((prev) => ({ ...prev, [report.id]: "" }));
+                              setReplyPlace((prev) => ({ ...prev, [report.id]: undefined }));
                               loadReports();
                             }
                           }}
                           className="space-y-2"
                         >
                           <label htmlFor={`reply-text-${report.id}`} className="sr-only">
-                            Additional incident details for dispatchers
+                            Your reply to the dispatcher
                           </label>
                           <textarea
                             id={`reply-text-${report.id}`}
@@ -328,24 +328,65 @@ export default function MyReportsPage() {
                             onChange={(e) => setReplyText((prev) => ({ ...prev, [report.id]: e.target.value }))}
                             placeholder="Provide additional details or landmark info..."
                             rows={2}
+                            maxLength={REPLY_MAX_LENGTH}
                             className="w-full min-h-[60px] rounded-lg bg-slate-900 border border-orange-800/80 p-2.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500 focus-visible:ring-2 focus-visible:ring-orange-500"
-                            required
+                            required={!hasReplyLocation}
                           />
+                          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPlaceError(null);
+                                if (!navigator.geolocation) {
+                                  setPlaceError({ id: report.id, message: "This device cannot share its location." });
+                                  return;
+                                }
+                                navigator.geolocation.getCurrentPosition(
+                                  (pos) => {
+                                    const { latitude, longitude } = pos.coords;
+                                    if (!isInGujarat(latitude, longitude)) {
+                                      setPlaceError({ id: report.id, message: "Your current location is outside Gujarat." });
+                                      return;
+                                    }
+                                    setReplyPlace((prev) => ({ ...prev, [report.id]: { latitude, longitude } }));
+                                  },
+                                  () => setPlaceError({ id: report.id, message: "Could not read your location. Allow location access and try again." }),
+                                  { enableHighAccuracy: true, timeout: 10000 }
+                                );
+                              }}
+                              className="min-h-[44px] px-3 rounded-lg border border-orange-700/70 text-orange-200 hover:bg-orange-900/40 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
+                            >
+                              <span aria-hidden="true">📍</span> Send my current location
+                            </button>
+                            {replyPlace[report.id] && (
+                              <span role="status" className="text-emerald-300">
+                                Location added ({replyPlace[report.id]!.latitude.toFixed(4)}, {replyPlace[report.id]!.longitude.toFixed(4)}){" "}
+                                <button
+                                  type="button"
+                                  onClick={() => setReplyPlace((prev) => ({ ...prev, [report.id]: undefined }))}
+                                  className="underline cursor-pointer"
+                                >
+                                  Remove
+                                </button>
+                              </span>
+                            )}
+                            {placeError?.id === report.id && <span role="alert" className="text-red-400">{placeError.message}</span>}
+                          </div>
                           {replyError?.id === report.id && (
                             <div role="alert" className="text-[11px] text-red-400 font-medium">{replyError.message}</div>
                           )}
                           <div className="flex justify-end">
                             <button
                               type="submit"
-                              disabled={replyingId === report.id}
+                              disabled={replyingId === report.id || (!hasReplyLocation && replyLength < REPLY_MIN_LENGTH)}
                               className="min-h-[44px] px-4 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-semibold shadow transition disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400"
                             >
-                              {replyingId === report.id ? "Submitting..." : "Send Response"}
+                              {replyingId === report.id ? "Sending..." : "Send reply"}
                             </button>
                           </div>
                         </form>
                       )}
-                    </div>
+                    </section>
                   )}
 
                   {/* Visual 4-Stage Progression Timeline */}
@@ -403,6 +444,34 @@ export default function MyReportsPage() {
                   {/* Detailed Timeline Drawer */}
                   {isSelected && (
                     <div className="mt-5 pt-4 border-t border-slate-800 text-xs space-y-2">
+                      <ReportPhotos incidentId={report.id} closed={["CLOSED", "REJECTED"].includes(report.status)} />
+                      {["SUBMITTED", "NEEDS_INFORMATION", "VERIFIED"].includes(currentStatus) && (
+                        <div className="pt-2 text-xs">
+                          {report.withdrawal_requested ? (
+                            <p role="status" className="text-amber-300">
+                              You asked to withdraw this report. A dispatcher will review it; until then it stays active.
+                            </p>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={withdrawing === report.id}
+                              onClick={async () => {
+                                if (!window.confirm("Ask the dispatchers to withdraw this report? Use this for a false alarm or a duplicate.")) return;
+                                setWithdrawing(report.id);
+                                setWithdrawError(null);
+                                const res = await requestWithdrawal(report.id);
+                                setWithdrawing(null);
+                                if (res.error) setWithdrawError({ id: report.id, message: res.error });
+                                else loadReports();
+                              }}
+                              className="min-h-[44px] px-3 rounded-lg border border-slate-600 text-slate-300 hover:bg-slate-800 cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                            >
+                              {withdrawing === report.id ? "Sending…" : "Ask to withdraw this report"}
+                            </button>
+                          )}
+                          {withdrawError?.id === report.id && <p role="alert" className="mt-1 text-red-400">{withdrawError.message}</p>}
+                        </div>
+                      )}
                       <div className="font-semibold text-slate-200 mb-2">Detailed Event Audit:</div>
                       <div className="space-y-1.5 font-mono text-[11px] text-slate-300">
                         <div className="flex items-center gap-2">

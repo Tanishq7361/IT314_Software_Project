@@ -86,3 +86,21 @@ def test_public_routes_expose_no_personal_data(client, make):
     r = client.get("/api/v1/public/incidents")
     assert r.status_code == 200
     assert not INTERNAL_KEYS & set(_walk_keys(r.json()))
+
+
+@pytest.mark.db
+def test_information_response_flow_leaks_no_internal_data_and_hides_pii_from_public(client, make):
+    citizen, staff = make.citizen(), make.staff()
+    created = client.post("/api/v1/incidents", json=PAYLOAD, headers={**citizen["headers"], "Idempotency-Key": "s3-02-info"})
+    iid = created.json()["incident_id"]
+    version = client.get(f"/api/v1/dm/incidents/{iid}", headers=staff["headers"]).json()["version"]
+    client.post(f"/api/v1/dm/incidents/{iid}/information-requests", headers=staff["headers"],
+                json={"question": "Which landmark?", "version": version})
+    reply = client.post(f"/api/v1/me/incidents/{iid}/information-response", headers=citizen["headers"],
+                        json={"message": "Next to the temple", "latitude": 23.03, "longitude": 72.58})
+    assert reply.status_code == 201, reply.text
+    assert not INTERNAL_KEYS & set(_walk_keys(reply.json()))
+    mine = client.get(f"/api/v1/me/incidents/{iid}", headers=citizen["headers"])
+    assert not INTERNAL_KEYS & set(_walk_keys(mine.json()))
+    public = client.get("/api/v1/public/incidents")
+    assert public.status_code == 200 and not INTERNAL_KEYS & set(_walk_keys(public.json()))

@@ -1,10 +1,10 @@
-# ResQ Gujarat — Dispatcher Workspace & Public Portal Operations Guide (S3-16)
+# ResQ Gujarat — Dispatcher Workspace & Public Portal Operations Guide
 
 **Document Version:** 1.0.0  
 **Author / Component Lead:** Tanishq Shah (`Tanishq7361`) — Frontend Lead (Public Site & Dispatcher Workspace)  
 **Applicable Interfaces:** `/`, `/about`, `/how-to`, `/safety`, `/dm/incidents`, `/dm/incidents/[id]`, `/dm/team-requests`, `/dm/signals`, `/dm/analytics`  
 **Platform Target:** Disaster Response Coordination Hub (DRCH) — Gujarat State Operations  
-**Compliance Standards:** WCAG 2.1 AA, Responsive Breakpoints (320px–1920px), Strict Human-in-the-Loop Governance, Public PII Safeguards
+**Compliance Standards:** WCAG 2.1 AA, Strict Human-in-the-Loop Governance, Public PII Safeguards
 
 ---
 
@@ -64,7 +64,7 @@ sequenceDiagram
     participant DM_UI as Dispatcher UI (/dm)
     participant BFF as Next.js BFF Proxy
     participant Backend as FastAPI Core
-    participant AI as AI Triage & Photo Service
+    participant AI as AI services (triage, image classifier)
 
     Dispatcher->>DM_UI: Select Incident from /dm/incidents
     DM_UI->>Backend: GET /api/v1/dm/incidents/{id}
@@ -73,8 +73,11 @@ sequenceDiagram
     rect rgb(240, 248, 255)
         Note over Dispatcher,AI: Advisory AI Decision Support
         Dispatcher->>DM_UI: Request AI Triage / Upload Scene Photo
-        DM_UI->>AI: Inference Request (Scrubbed PII)
-        AI-->>DM_UI: Advisory Prediction & Confidence Score
+        DM_UI->>BFF: POST /api/dm/incidents/{id}/ai-triage or /photo-analyse
+        BFF->>Backend: Same request with the session token
+        Backend->>AI: Inference request (personal data removed; photo sent only for analysis)
+        AI-->>Backend: Advisory prediction and confidence
+        Backend-->>DM_UI: Advisory result (audited; incident unchanged)
         Note over DM_UI: Render "Advisory Only — Not Verified"
     end
 
@@ -98,14 +101,14 @@ sequenceDiagram
 ### 4.1 Strict Human-in-the-Loop Governance
 - **No Autonomous State Transitions:** Machine learning models (both text triage and image classification) are strictly advisory. AI systems cannot change an incident's status, verify an emergency, or trigger resource dispatch autonomously.
 - **Separate Audit Recording:** When a dispatcher accepts, modifies, or rejects an AI recommendation, the human decision, rationale, timestamp, and operator ID are recorded in `ai_recommendations` and chained into the immutable SHA-256 audit log.
-- **Photo Analysis Safety (S3-08):** Scene images evaluated by the ConvNeXt image classifier produce advisory scenario probabilities. They are explicitly barred from serving as automated incident verification. If the model service is unavailable, the UI provides immediate visual fallback without interrupting manual triage.
+- **Photo Analysis (S3-08):** A dispatcher can upload one JPEG, PNG or WebP scene photo (up to 10 MB) from the AI panel. The backend checks the file's real type from its first bytes, sends it to the image classifier and returns the top class with a confidence. `fire`, `flood` and `hurricane` map to the supported scenarios `industrial_fire`, `urban_flooding` and `cyclone`; `earthquake`, `landslide` and `other_disaster` are shown as out of scope, and `not_disaster` as "no disaster detected". The photo is never stored on the incident, the result is never a verification, and each analysis writes an `AI_PHOTO_ANALYSED` audit entry. If the model is not configured or does not answer, the panel shows "Photo analysis model is currently unavailable" and manual triage carries on. Set `AI_IMAGE_SERVICE_URL` to enable it. When the frontend is hosted on a platform that caps request bodies (for example about 4.5 MB on Vercel), larger photos are rejected before they reach the backend.
 
-### 4.2 Team Recommendation & Dispatch Integration (S2-03, S3-14)
+### 4.2 Team Recommendation & Dispatch Integration
 - **Multi-Factor Scoring:** Available response teams (`NDRF`, `SDRF`, Municipal Fire Brigades) are scored by:
   $$\text{Score} = (\text{Primary Capability Groups} \times 10) + (\text{Secondary Matches} \times 3) - (\text{Distance km} \times 0.08)$$
 - **Advisory Labeling:** Recommendations are clearly marked with: *"Advisory — you confirm the dispatch"*.
 - **Empty Team Fallback:** If all matching units are deployed or out of range, the dispatch panel renders: *"No available team matches; allocate manually"*, ensuring dispatchers are prompted to request inter-agency mutual aid rather than facing a blank interface.
-- **Three-Click Dispatch Invariant:** Dispatchers can view a recommended unit, click *Add to dispatch*, and confirm order creation in three actions, with idempotency protection against double-booking.
+- **Idempotent Dispatch:** *Add to dispatch* only pre-fills the form; the dispatcher confirms, and dispatch creation carries an idempotency key so a repeated submit does not double-book a team.
 
 ---
 
@@ -127,14 +130,15 @@ sequenceDiagram
 
 ---
 
-## 7. AI vs. Human Decision Analytics (`/dm/analytics`, S3-06)
+## 7. AI vs. Human Decision Analytics (`/dm/analytics`)
 
 1. **Decision Metrics:** Tracks the proportion of AI suggestions accepted verbatim, modified with dispatcher adjustments, or rejected outright.
 2. **Confidence Stratification:** Disaggregates performance across three standardized confidence bands:
    - **High Confidence ($\ge 80\%$):** Expected primary alignment; monitored for automation bias.
    - **Medium Confidence ($60\% - 79\%$):** Routine human review required.
    - **Low Confidence ($< 60\%$):** Flagged for manual triage; candidates for model retraining.
-3. **Out-of-Scope Segregation:** Scenarios falling outside the platform's four core hazard profiles (e.g., landslides, building collapses) are categorized separately to prevent skewing operational metrics.
+3. **By Scenario:** A table shows accepted, modified, rejected and undecided suggestions for each scenario, and rows with no recorded confidence appear as a separate band.
+4. **Out-of-Scope Segregation:** Suggestions outside the three supported scenarios (cyclone, industrial fire, urban flooding) are counted separately to prevent skewing operational metrics.
 
 ---
 
@@ -143,4 +147,4 @@ sequenceDiagram
 - **Contrast Ratios:** Text and critical UI components maintain a minimum contrast ratio of 4.5:1 against backgrounds (7:1 for headers).
 - **Touch Targets:** All interactive buttons, tabs, and select fields adhere to a minimum 44px × 44px hit target (48px for emergency actions).
 - **Trilingual Accessibility:** The auth shell supports English, Hindi, and Gujarati with proper `lang` attributes, live form validation hints, and accessible emergency dial buttons (112, 108, 101, 1070).
-- **Keyboard Navigation:** Every dashboard panel supports sequential tab order, visible focus rings (`focus-visible:ring-4`), and dialog escape handling without trapped focus.
+- **Keyboard Navigation:** Panels follow a sequential tab order with visible focus rings. Dialogs are native modal `<dialog>` elements: `Escape` closes them and focus returns to the control that opened them.

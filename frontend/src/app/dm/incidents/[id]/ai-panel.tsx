@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { AiBadge, PriorityBadge } from "@/components/badges";
 import { useAction } from "@/components/use-action";
@@ -237,9 +237,13 @@ type PhotoAnalyseResult = {
   suggested_scenario: string | null;
   confidence: number;
   is_out_of_scope: boolean;
+  no_disaster_detected: boolean;
   needs_review: boolean;
   advisory_notice: string;
 };
+
+const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const PHOTO_MAX_BYTES = 10 * 1024 * 1024;
 
 function PhotoAnalyseSection({ incidentId }: { incidentId: string }) {
   const [file, setFile] = useState<File | null>(null);
@@ -248,18 +252,28 @@ function PhotoAnalyseSection({ incidentId }: { incidentId: string }) {
   const [result, setResult] = useState<PhotoAnalyseResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Release the preview object URL when the panel goes away.
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
   const onSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
+    e.target.value = ""; // allow choosing the same file again after a rejection
     if (!f) return;
-    setError(null);
     setResult(null);
+    if (!PHOTO_TYPES.includes(f.type)) {
+      setError("Choose a JPEG, PNG or WebP photo.");
+      return;
+    }
+    if (f.size > PHOTO_MAX_BYTES) {
+      setError("That photo is larger than 10 MB. Choose a smaller one.");
+      return;
+    }
+    setError(null);
     setFile(f);
-    const url = URL.createObjectURL(f);
-    setPreview(url);
+    setPreview(URL.createObjectURL(f));
   };
 
   const clear = () => {
-    if (preview) URL.revokeObjectURL(preview);
     setFile(null);
     setPreview(null);
     setResult(null);
@@ -275,7 +289,7 @@ function PhotoAnalyseSection({ incidentId }: { incidentId: string }) {
         method: "POST",
         headers: {
           "content-type": file.type || "image/jpeg",
-          "x-filename": file.name,
+          "x-filename": encodeURIComponent(file.name), // header values must be ASCII; the server decodes it
         },
         body: file,
       });
@@ -295,7 +309,7 @@ function PhotoAnalyseSection({ incidentId }: { incidentId: string }) {
     <div className="mt-4 border-t border-border pt-4">
       <div className="flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-          Advisory photo analysis (S3-08)
+          Advisory photo analysis
         </span>
         <span className="text-[11px] text-muted italic">Never stored as verification</span>
       </div>
@@ -325,23 +339,25 @@ function PhotoAnalyseSection({ incidentId }: { incidentId: string }) {
       )}
 
       {error && (
-        <div className="mt-2">
+        <div className="mt-2" role="alert">
           <Notice tone="medium">{error}</Notice>
         </div>
       )}
 
       {result && (
-        <div className="mt-3 rounded-lg border border-ai/30 bg-ai-soft/30 p-3 text-xs space-y-1.5">
+        <div role="status" className="mt-3 rounded-lg border border-ai/30 bg-ai-soft/30 p-3 text-xs space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="font-semibold text-foreground">
-              Detected: {result.suggested_scenario ? scenarioLabel[result.suggested_scenario] ?? label(result.prediction) : label(result.prediction)}
+              {result.no_disaster_detected
+                ? "No disaster detected in this photo"
+                : `Detected: ${result.suggested_scenario ? scenarioLabel[result.suggested_scenario] ?? label(result.prediction) : label(result.prediction)}`}
             </span>
             <span className="font-mono font-bold text-info">
               {Math.round(result.confidence * 100)}% confidence
             </span>
           </div>
           {result.is_out_of_scope && (
-            <p className="text-amber-500">Out-of-scope disaster type. Verify manually.</p>
+            <p className="text-amber-500">This disaster type is not one of the three supported scenarios. Verify manually.</p>
           )}
           {result.needs_review && (
             <p className="text-amber-500">Confidence below threshold — human review advised.</p>

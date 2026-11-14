@@ -85,6 +85,7 @@ export interface ReportData {
   linked_incident_id: string | null;
   source: string;
   timeline: TimelineEntry[];
+  withdrawal_requested?: boolean;
 }
 
 interface MyIncident {
@@ -101,6 +102,7 @@ interface MyIncident {
   latitude: number | null;
   longitude: number | null;
   timeline: TimelineEntry[];
+  withdrawal_requested?: boolean;
 }
 
 export const SCENARIO_LABEL: Record<Scenario, string> = {
@@ -132,11 +134,56 @@ function toReport(i: MyIncident): ReportData {
     linked_incident_id: null,
     source: "CITIZEN_APP",
     timeline: i.timeline ?? [],
+    withdrawal_requested: i.withdrawal_requested ?? false,
   };
 }
 
-export async function createReport(payload: IncidentReportPayload, options?: ApiOptions) {
+/**
+ * Submit a report. The Idempotency-Key is required by the backend (422 IDEMPOTENCY_KEY_REQUIRED
+ * otherwise): keep ONE key per form session and reuse it on retries, so a resubmission after a
+ * network failure returns the same incident instead of creating a duplicate.
+ */
+export async function createReport(payload: IncidentReportPayload, options: ApiOptions & { idempotencyKey: string }) {
   return apiFetch<CreatedIncident>("/api/citizen/incidents", options, { method: "POST", body: JSON.stringify(payload) });
+}
+
+// ── Evidence photos (issue #68) ────────────────────────────────
+
+export interface EvidencePolicy {
+  enabled: boolean;
+  max_bytes: number;
+  allowed_types: string[];
+}
+
+export interface UploadedEvidence {
+  evidence_id: string;
+  file_name: string;
+  sha256: string;
+  moderation_state: "PENDING";
+}
+
+export async function fetchEvidencePolicy(): Promise<ApiResult<EvidencePolicy>> {
+  return apiFetch<EvidencePolicy>("/api/citizen/incidents/evidence-policy");
+}
+
+/** Attach a photo to the caller's own report. The file is sent as the raw body, not JSON. */
+export async function uploadEvidence(incidentId: string, file: File): Promise<ApiResult<UploadedEvidence>> {
+  try {
+    const res = await fetch(`/api/citizen/incidents/${encodeURIComponent(incidentId)}/evidence`, {
+      method: "POST",
+      headers: { "Content-Type": file.type, "X-Filename": encodeURIComponent(file.name) },
+      body: file,
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { data: null, error: body?.error?.message || `Upload failed (${res.status})`, isBackend: true };
+    }
+    return { data: body as UploadedEvidence, error: null, isBackend: true };
+  } catch (err) {
+    return { data: null, error: err instanceof Error ? err.message : "Service unreachable", isBackend: false };
+  }
 }
 
 export async function fetchMyReports(): Promise<ApiResult<ReportData[]>> {
@@ -150,21 +197,111 @@ export async function fetchReportById(reportId: string): Promise<ApiResult<Repor
 }
 
 /**
- * Citizen response to a dispatcher information request (SRS Requirement S2-13).
- * POST /api/v1/me/incidents/{id}/information via BFF proxy.
+ * Citizen response to a dispatcher information request (S2-13): text, a corrected location, or both.
+ * POST /api/v1/me/incidents/{id}/information-response via the BFF proxy. The incident returns to SUBMITTED.
  */
 export async function replyToInformationRequest(
   incidentId: string,
-  message: string
+  message?: string,
+  location?: { latitude: number; longitude: number }
 ): Promise<ApiResult<{ incident_id: string; status: string }>> {
   return apiFetch<{ incident_id: string; status: string }>(
-    `/api/citizen/me/incidents/${encodeURIComponent(incidentId)}/information`,
+    `/api/citizen/me/incidents/${encodeURIComponent(incidentId)}/information-response`,
     undefined,
     {
       method: "POST",
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ ...(message ? { message } : {}), ...(location ?? {}) }),
     }
   );
+}
+
+/** Ask the dispatchers to withdraw a report. Only records the request; a dispatcher decides. */
+export async function requestWithdrawal(incidentId: string, reason?: string): Promise<ApiResult<{ incident_id: string; status: string; withdrawal_requested: boolean }>> {
+  return apiFetch(`/api/citizen/me/incidents/${encodeURIComponent(incidentId)}/withdrawal-request`, undefined, {
+    method: "POST",
+    body: JSON.stringify(reason?.trim() ? { reason: reason.trim() } : {}),
+  });
+}
+
+// ── Photo attachments (NU-FR-05) ───────────────────────────────
+
+export interface AttachmentData {
+  evidence_id: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  status: string;
+  uploaded_at: string;
+}
+
+/** Client-side limits; the server enforces its own (5 MB, 5 photos, JPEG/PNG/WebP). 4 MB stays under the hosting proxy body limit. */
+export const ATTACHMENT_LIMITS = { maxBytes: 4 * 1024 * 1024, maxFiles: 5, types: ["image/jpeg", "image/png", "image/webp"] };
+
+export function attachmentUrl(incidentId: string, evidenceId: string): string {
+  return `/api/citizen/me/incidents/${encodeURIComponent(incidentId)}/attachments/${encodeURIComponent(evidenceId)}`;
+}
+
+export async function uploadAttachment(incidentId: string, file: File): Promise<ApiResult<AttachmentData>> {
+  return apiFetch<AttachmentData>(
+    `/api/citizen/me/incidents/${encodeURIComponent(incidentId)}/attachments`,
+    undefined,
+    { method: "POST", body: file, headers: { "Content-Type": file.type, "X-Filename": encodeURIComponent(file.name) } }
+  );
+}
+
+export async function fetchAttachments(incidentId: string): Promise<ApiResult<{ items: AttachmentData[]; max_attachments: number }>> {
+  return apiFetch(`/api/citizen/me/incidents/${encodeURIComponent(incidentId)}/attachments`);
+}
+
+export async function removeAttachment(incidentId: string, evidenceId: string): Promise<ApiResult<{ evidence_id: string; status: string }>> {
+  return apiFetch(attachmentUrl(incidentId, evidenceId), undefined, { method: "DELETE" });
+}
+
+// ── Account (profile, password) ────────────────────────────────
+
+export interface ProfileData {
+  user_id: string;
+  email: string;
+  full_name: string;
+  phone: string | null;
+  preferred_language: "en" | "hi" | "gu";
+  alerts: { in_app: boolean; email: boolean; sms: boolean };
+  created_at: string;
+  /** False for a Google sign-in account that never set a password. */
+  has_password: boolean;
+}
+
+export interface ProfileUpdate {
+  full_name?: string;
+  phone?: string;
+  preferred_language?: "en" | "hi" | "gu";
+  email_alerts?: boolean;
+  sms_alerts?: boolean;
+}
+
+export async function fetchProfile(): Promise<ApiResult<ProfileData>> {
+  return apiFetch<ProfileData>("/api/citizen/me/profile");
+}
+
+export async function updateProfile(update: ProfileUpdate): Promise<ApiResult<ProfileData>> {
+  return apiFetch<ProfileData>("/api/citizen/me/profile", undefined, { method: "PATCH", body: JSON.stringify(update) });
+}
+
+/** On success every session ends (the server bumps the token version); the caller signs the user out. */
+export async function changePassword(currentPassword: string, newPassword: string): Promise<ApiResult<{ changed: boolean; sign_in_required: boolean }>> {
+  return apiFetch("/api/citizen/me/password", undefined, {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}
+
+/** Erase personal details and end every session. Refused while a report is still open. */
+export async function deleteAccount(password: string): Promise<ApiResult<{ deleted: boolean; sign_in_required: boolean }>> {
+  return apiFetch("/api/citizen/me/account/deletion", undefined, { method: "POST", body: JSON.stringify({ password }) });
+}
+
+export async function markAllNotificationsRead(): Promise<ApiResult<{ marked_read: number }>> {
+  return apiFetch("/api/citizen/me/notifications/read-all", undefined, { method: "POST" });
 }
 
 // ── Public endpoints (no auth) ─────────────────────────────────

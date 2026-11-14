@@ -5,7 +5,8 @@ import Link from "next/link";
 import { fetchPublicIncidents, fetchPublicAlerts, PublicIncident, PublicAlert } from "../services/citizenApi";
 import { LiveOperationsLayer } from "../components/dm/LiveOperationsLayer";
 import { signOut } from "./login/actions";
-import { GUJARAT_BOUNDS, GUJARAT_CENTER, GUJARAT_DEFAULT_ZOOM, GUJARAT_DISTRICTS } from "../lib/geo";
+import { NavLink, SiteHeader } from "../components/Brand";
+import { GUJARAT_CENTER, GUJARAT_DEFAULT_ZOOM, GUJARAT_DISTRICTS, INDIA_BOUNDS } from "../lib/geo";
 
 interface SessionInfo {
   authenticated: boolean;
@@ -15,20 +16,22 @@ interface SessionInfo {
   name: string | null;
 }
 
+// Two base maps, both OpenStreetMap data. The map keeps its position and zoom when you switch between them.
 const TILE_LAYERS = {
   streets: {
     name: "OpenStreetMap",
     base: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    subdomains: [],
-    maxZoom: 19,
+    subdomains: [] as string[],
+    maxNativeZoom: 19,
   },
   humanitarian: {
     name: "Humanitarian OSM",
     base: "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
     subdomains: ["a", "b"],
-    maxZoom: 19,
+    maxNativeZoom: 19,
   },
 };
+const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: "#ef4444",
@@ -44,19 +47,22 @@ export default function PublicPortalPage() {
   const mapRef = useRef<any>(null);
   const markersLayerRef = useRef<any>(null);
   const alertsLayerRef = useRef<any>(null);
+  // Last map position, so switching the base map keeps where you are zoomed in.
+  const viewRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
 
   const [incidents, setIncidents] = useState<PublicIncident[]>([]);
   const [alerts, setAlerts] = useState<PublicAlert[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState<PublicIncident | null>(null);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [coordsText, setCoordsText] = useState("Gujarat, India");
   const [mapReadyVersion, setMapReadyVersion] = useState(0);
-  const [activeBaseLayer, setActiveBaseLayer] = useState<"streets" | "humanitarian">("streets");
   const [showAlertsLayer, setShowAlertsLayer] = useState(true);
   const [showAlertsDrawer, setShowAlertsDrawer] = useState(false);
   const [showMobileLegend, setShowMobileLegend] = useState(false);
   const [districtFilter, setDistrictFilter] = useState<string>("");
+  const [activeBaseLayer, setActiveBaseLayer] = useState<"streets" | "humanitarian">("streets");
   const visibleIncidents = districtFilter ? incidents.filter((i) => i.district === districtFilter) : incidents;
 
   // 1. Fetch user session
@@ -129,22 +135,49 @@ export default function PublicPortalPage() {
         const map = L.map(mapContainerRef.current, {
           zoomControl: false,
           attributionControl: true,
-          minZoom: 6,
-          maxZoom: 18,
-          maxBounds: GUJARAT_BOUNDS,
+          minZoom: 4,
+          maxZoom: 19,
+          // Panning limit: India plus a wide margin. It must be roomy, because a Gujarat-centred view on a wide screen reaches
+          // well west of India's edge; a tight limit pushed the opening view east so Gujarat sat on the left. The lowest zoom
+          // (fitIndiaZoom below) still shows exactly all of India.
+          maxBounds: L.latLngBounds(INDIA_BOUNDS).pad(0.4),
           maxBoundsViscosity: 1.0,
-        }).setView(GUJARAT_CENTER, GUJARAT_DEFAULT_ZOOM);
+        }).setView(viewRef.current?.center ?? GUJARAT_CENTER, viewRef.current?.zoom ?? GUJARAT_DEFAULT_ZOOM);
 
         mapRef.current = map;
+        // The lowest zoom is the one at which all of India just fits the screen, so it stays centred at any window size.
+        const fitIndiaZoom = () => map.setMinZoom(map.getBoundsZoom(INDIA_BOUNDS));
+        fitIndiaZoom();
+        map.on("resize", fitIndiaZoom);
+        map.on("moveend", () => {
+          const c = map.getCenter();
+          viewRef.current = { center: [c.lat, c.lng], zoom: map.getZoom() };
+        });
 
         const cfg = TILE_LAYERS[activeBaseLayer];
         L.tileLayer(cfg.base, {
-          maxZoom: cfg.maxZoom,
+          maxZoom: 19,
+          maxNativeZoom: cfg.maxNativeZoom,
+          // Leaflet's default tile updating while zooming is kept: turning it off (updateWhenZooming) makes zooming look blurrier.
+          // detectRetina is not used: it asks OSM for zoom 20 tiles, which do not exist, and blanks the map.
           subdomains: cfg.subdomains,
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          attribution: OSM_ATTRIBUTION,
         }).addTo(map);
 
-        L.control.zoom({ position: "bottomright" }).addTo(map);
+        const zoomControl = L.control.zoom({ position: "bottomright" }).addTo(map);
+        // From the all-India view the middle of the screen is central India, so zooming in there would leave Gujarat
+        // stuck on the left. While zoomed out further than the Gujarat view, the + button zooms in towards Gujarat instead.
+        zoomControl.getContainer()?.addEventListener(
+          "click",
+          (event: Event) => {
+            const button = (event.target as HTMLElement).closest(".leaflet-control-zoom-in");
+            if (!button || button.classList.contains("leaflet-disabled") || map.getZoom() >= GUJARAT_DEFAULT_ZOOM) return;
+            event.stopPropagation();
+            event.preventDefault();
+            map.flyTo(GUJARAT_CENTER, Math.min(map.getZoom() + 1, GUJARAT_DEFAULT_ZOOM), { duration: 0.6 });
+          },
+          true
+        );
         L.control.scale({ imperial: false, position: "bottomleft" }).addTo(map);
 
         markersLayerRef.current = L.layerGroup().addTo(map);
@@ -152,6 +185,28 @@ export default function PublicPortalPage() {
 
         map.on("mousemove", (e: any) => {
           setCoordsText(`${e.latlng.lat.toFixed(4)}°N, ${e.latlng.lng.toFixed(4)}°E`);
+        });
+
+        // Click anywhere to see the address down to street level (society, street, locality) from OpenStreetMap.
+        // Incident markers handle their own clicks. Nominatim allows about one request per second.
+        let lastLookup = 0;
+        map.on("click", async (e: any) => {
+          if (Date.now() - lastLookup < 1100) return;
+          lastLookup = Date.now();
+          const box = document.createElement("div");
+          box.style.cssText = "max-width:240px;font-size:12px;line-height:1.4;color:#0f172a";
+          box.textContent = "Looking up the address…";
+          const popup = L.popup().setLatLng(e.latlng).setContent(box).openOn(map);
+          try {
+            const res = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=en&lat=${e.latlng.lat.toFixed(6)}&lon=${e.latlng.lng.toFixed(6)}`
+            );
+            const data = await res.json();
+            box.textContent = data?.display_name || "No named place or street is mapped at this spot.";
+          } catch {
+            box.textContent = "Could not look up this address. Try again in a moment.";
+          }
+          popup.update();
         });
         setMapReadyVersion((version) => version + 1);
       } catch (err) {
@@ -169,6 +224,20 @@ export default function PublicPortalPage() {
       }
     };
   }, [activeBaseLayer]);
+
+  // Zoom to the chosen district's incidents, or back to the overview for "All Gujarat".
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const points = incidents.filter((i) => i.district === districtFilter && i.lat && i.lon).map((i) => [i.lat, i.lon] as [number, number]);
+    if (!districtFilter) {
+      map.flyTo(GUJARAT_CENTER, GUJARAT_DEFAULT_ZOOM, { duration: 0.8 });
+    } else if (points.length) {
+      map.flyToBounds(points, { padding: [60, 60], maxZoom: 13, duration: 0.8 });
+    }
+    // Only when the district choice changes; new incident data should not move the map.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [districtFilter]);
 
   // 4. Update Incident Markers
   useEffect(() => {
@@ -200,6 +269,8 @@ export default function PublicPortalPage() {
 
       marker.on("click", () => {
         setSelectedIncident(inc);
+        // Zoom in to street level around the incident so its surroundings and street names are visible.
+        map.flyTo([inc.lat, inc.lon], Math.max(map.getZoom(), 16), { duration: 0.8 });
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -294,116 +365,79 @@ export default function PublicPortalPage() {
   }, [alerts, showAlertsLayer, mapReadyVersion]);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-slate-900 font-sans flex flex-col">
+    <div className="app-screen relative bg-slate-900 font-sans flex flex-col">
       {/* Top Header */}
-      <header className="z-[1000] h-16 bg-[#0c4a75]/95 backdrop-blur-md border-b border-[#093554] px-4 md:px-6 flex items-center justify-between shadow-lg shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-sky-400/20 border border-white flex items-center justify-center text-xl shadow-inner">
-            🛡️
-          </div>
-          <div>
-            <div className="flex items-baseline gap-1.5 leading-tight">
-              <span className="text-xl font-black text-white tracking-tight">ResQ</span>
-              <span className="text-xs font-medium text-sky-200">Gujarat Emergency Portal</span>
-            </div>
-            <div className="text-[10px] text-sky-200/80">Disaster Response Coordination Hub · NDMA</div>
-          </div>
-        </div>
-
-        {/* Action Controls & Navigation */}
-        <div className="flex items-center gap-2.5">
-          {/* Alerts button */}
-          <button
-            onClick={() => setShowAlertsDrawer(!showAlertsDrawer)}
-            className="relative px-3 py-1.5 rounded-lg bg-sky-950/80 hover:bg-sky-900 border border-sky-700/60 text-white text-xs font-semibold flex items-center gap-1.5 transition"
-          >
-            <span>🔔</span>
-            <span className="hidden sm:inline">Active Alerts</span>
-            {alerts.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.2 bg-red-600 text-white text-[10px] rounded-full font-bold">
-                {alerts.length}
-              </span>
-            )}
-          </button>
-
-          {/* Quick links */}
-          <Link
-            href="/report"
-            className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md transition"
-          >
-            <span>🚨</span>
-            <span>Report Incident</span>
-          </Link>
-
-          <Link
-            href="/my-reports"
-            className="hidden sm:flex px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold items-center gap-1.5 transition"
-          >
-            <span>📋</span>
-            <span>My Reports</span>
-          </Link>
-
-          <Link
-            href="/about"
-            className="hidden md:flex px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold items-center gap-1.5 transition"
-          >
-            <span>ℹ️</span>
-            <span>About</span>
-          </Link>
-
-          <Link
-            href="/how-to"
-            className="hidden md:flex px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold items-center gap-1.5 transition"
-          >
-            <span>❓</span>
-            <span>How to use</span>
-          </Link>
-
-          <Link
-            href="/safety"
-            className="hidden md:flex px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold items-center gap-1.5 transition"
-          >
-            <span>🛟</span>
-            <span>Safety</span>
-          </Link>
-
-          <Link
-            href="/donate"
-            className="hidden sm:flex px-3 py-1.5 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-semibold items-center gap-1.5 transition"
-          >
-            <span>🤝</span>
-            <span>Donate</span>
-          </Link>
-
-          {/* User / Auth status */}
-          {session?.authenticated ? (
-            <div className="flex items-center gap-2 pl-2 border-l border-sky-800">
-              <Link
-                href={session.dm ? "/dm" : "/citizen/dashboard"}
-                className="text-xs font-semibold text-sky-200 hover:text-white underline truncate max-w-[120px]"
-              >
-                {session.name || "My Account"}
-              </Link>
-              <button
-                onClick={async () => {
-                  await signOut();
-                }}
-                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition"
-              >
-                Sign Out
-              </button>
-            </div>
-          ) : (
-            <Link
-              href="/login"
-              className="px-3.5 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-md transition"
-            >
-              <span>🔐</span>
-              <span>Sign In</span>
-            </Link>
+      <SiteHeader subtitle="Gujarat Emergency Portal · NDMA" maxWidth="max-w-none">
+        <button
+          onClick={() => setShowAlertsDrawer(!showAlertsDrawer)}
+          className="relative inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-sky-700/60 bg-sky-950/80 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-900"
+        >
+          <span aria-hidden>🔔</span>
+          <span className="hidden sm:inline">Active Alerts</span>
+          {alerts.length > 0 && (
+            <span className="rounded-full bg-red-600 px-1.5 text-[10px] font-bold">{alerts.length}</span>
           )}
-        </div>
-      </header>
+        </button>
+        <NavLink href="/report" variant="primary">Report<span className="hidden sm:inline"> Incident</span></NavLink>
+        <NavLink href="/my-reports" hideBelow="lg">My Reports</NavLink>
+        <NavLink href="/about" hideBelow="lg">About</NavLink>
+        <NavLink href="/how-to" hideBelow="lg">How to use</NavLink>
+        <NavLink href="/safety" hideBelow="lg">Safety</NavLink>
+        <NavLink href="/donate" hideBelow="lg" variant="success">Donate</NavLink>
+        {session?.authenticated ? (
+          <div className="hidden items-center gap-2 border-l border-sky-800 pl-2 sm:flex">
+            <Link
+              href={session.dm ? "/dm" : "/citizen/dashboard"}
+              className="max-w-[120px] truncate text-xs font-semibold text-sky-200 underline hover:text-white"
+            >
+              {session.name || "My Account"}
+            </Link>
+            <button
+              onClick={async () => {
+                await signOut();
+              }}
+              className="rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20"
+            >
+              Sign Out
+            </button>
+          </div>
+        ) : (
+          <Link
+            href="/login"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-bold text-slate-950 transition hover:bg-sky-400"
+          >
+            Sign In
+          </Link>
+        )}
+        <button
+          onClick={() => setMenuOpen((v) => !v)}
+          className="rounded-lg bg-white/10 px-2.5 py-1.5 text-sm text-white hover:bg-white/20 lg:hidden"
+          aria-label="Toggle menu"
+          aria-expanded={menuOpen}
+        >
+          {menuOpen ? "✕" : "☰"}
+        </button>
+      </SiteHeader>
+      {menuOpen && (
+        <nav className="absolute inset-x-0 top-14 z-[1000] flex flex-col gap-1 border-b border-[#093554] bg-[#0c4a75] p-3 text-sm text-white shadow-xl lg:hidden" aria-label="Menu">
+          {[
+            ["/my-reports", "My Reports"],
+            ["/about", "About"],
+            ["/how-to", "How to use"],
+            ["/safety", "Safety"],
+            ["/donate", "Donate"],
+          ].map(([href, label]) => (
+            <Link key={href} href={href} className="rounded-lg px-3 py-2 font-semibold hover:bg-white/10" onClick={() => setMenuOpen(false)}>
+              {label}
+            </Link>
+          ))}
+          {session?.authenticated && (
+            <button onClick={async () => { await signOut(); }} className="rounded-lg px-3 py-2 text-left font-semibold hover:bg-white/10">
+              Sign Out
+            </button>
+          )}
+        </nav>
+      )}
 
       {/* Main Map View */}
       <div className="relative flex-1 w-full h-full">

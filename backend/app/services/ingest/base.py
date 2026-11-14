@@ -3,6 +3,28 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+import httpx
+
+
+def get_capped(client: httpx.Client, url: str, *, params: dict[str, Any], limit: int) -> tuple[bytes, httpx.URL, str | None]:
+    """GET `url` and read at most `limit` bytes of body.
+
+    The body is streamed and the read stops as soon as it passes the limit, so an oversized or
+    endless response is never held in memory. Returns (body, final URL after redirects, charset).
+    Raises ValueError when the limit is exceeded and httpx errors for HTTP failures.
+    """
+    with client.stream("GET", url, params=params) as response:
+        response.raise_for_status()
+        declared = response.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > limit:
+            raise ValueError("response exceeded the size limit")
+        body = bytearray()
+        for chunk in response.iter_bytes():
+            body += chunk
+            if len(body) > limit:
+                raise ValueError("response exceeded the size limit")
+        return bytes(body), response.url, response.charset_encoding
+
 
 class Adapter(ABC):
     """Abstract base class for ingestion adapters."""

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useContext, useState, type ReactNode } from "react";
 
+import { Brand } from "@/components/Brand";
 import { AlertsDrawer } from "@/components/dm/AlertsDrawer";
 import { ToastProvider, cx } from "@/components/ui";
 
@@ -77,13 +78,13 @@ export function DmShell({ user, signOut, children }: { user: StaffUser; signOut:
   return (
     <UserContext.Provider value={user}>
       <ToastProvider>
-        <div className="dm-theme flex h-screen w-full flex-col font-sans">
+        <div className="dm-theme app-screen flex flex-col font-sans">
           {/* Same top banner as the ResQ login page */}
           <header className="z-30 flex h-14 shrink-0 items-center gap-3 border-b border-[#093554] bg-[#0c4a75] px-4 text-white shadow-md sm:px-6">
             <button className="rounded-md p-2 text-sky-100 hover:bg-white/10 lg:hidden" onClick={() => setOpen(true)} aria-label="Open navigation">
               ☰
             </button>
-            <Brand />
+            <Brand href="/dm" subtitle="Disaster Management" size="sm" />
             <span className="hidden rounded-full border border-sky-300/40 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-100 md:inline">
               Disaster Management
             </span>
@@ -98,7 +99,7 @@ export function DmShell({ user, signOut, children }: { user: StaffUser; signOut:
                 </p>
               </div>
               <button onClick={() => setAlertsOpen(true)} className="rounded-full bg-white/10 px-3 py-1.5 text-xs transition hover:bg-white/20">
-                <span aria-hidden>🔔</span> Alerts
+                <span aria-hidden>🔔</span><span className="hidden sm:inline"> Alerts</span>
               </button>
               <form action={signOut}>
                 <button className="rounded-full bg-white/10 px-3 py-1.5 text-xs transition hover:bg-white/20">Sign out</button>
@@ -125,22 +126,5 @@ export function DmShell({ user, signOut, children }: { user: StaffUser; signOut:
         </div>
       </ToastProvider>
     </UserContext.Provider>
-  );
-}
-
-function Brand() {
-  return (
-    <Link href="/dm" className="flex items-center gap-2.5">
-      <span className="flex size-8 items-center justify-center rounded-full border border-white bg-sky-400/20 text-lg" aria-hidden>
-        🛡️
-      </span>
-      <span className="leading-tight">
-        <span className="flex items-baseline gap-1.5">
-          <span className="text-xl font-extrabold">ResQ</span>
-          <span className="text-xs font-light text-sky-200">GeoPlatform</span>
-        </span>
-        <span className="block text-[9px] text-sky-200/80">NDMA Disaster Response Coordination Hub</span>
-      </span>
-    </Link>
   );
 }

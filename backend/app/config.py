@@ -65,13 +65,15 @@ class Settings:
     invitation_token_hours: int = 48
     password_reset_token_minutes: int = 15
     google_client_id: str | None = None
-    google_client_secret: str | None = None
     razorpay_key_id: str | None = None
     razorpay_key_secret: str | None = None
     razorpay_webhook_secret: str | None = None
     sachet_feed_url: str = ""
     usgs_feed_url: str = ""
     social_replay_file: str = ""
+    news_rss_enabled: bool = False
+    bluesky_search_enabled: bool = False
+    bluesky_search_url: str = ""
     ingest_interval_seconds: int = 600
 
     def require(self, name: str) -> str:
@@ -97,7 +99,7 @@ def get_settings() -> Settings:
         lockout_minutes=_int("LOGIN_LOCKOUT_MINUTES", 15),
         dispatch_ack_timeout_minutes=_int("DISPATCH_ACK_TIMEOUT_MINUTES", 15),
         ai_low_confidence_threshold=float(os.getenv("AI_LOW_CONFIDENCE_THRESHOLD", "0.6")),
-        google_maps_api_key=os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_GEOCODING_API_KEY"),
+        google_maps_api_key=os.getenv("GOOGLE_MAPS_API_KEY") or None,
         boundary_sync_enabled=_bool("BOUNDARY_SYNC_ENABLED", True),
         boundary_sync_interval_hours=_int("BOUNDARY_SYNC_INTERVAL_HOURS", 720),  # Monthly (30 days = 720h)
         boundary_sync_check_interval_seconds=_int("BOUNDARY_SYNC_CHECK_INTERVAL_SECONDS", 86400),
@@ -120,7 +122,6 @@ def get_settings() -> Settings:
         invitation_token_hours=_int("INVITATION_TOKEN_HOURS", 48),
         password_reset_token_minutes=_int("PASSWORD_RESET_TOKEN_MINUTES", 15),
         google_client_id=os.getenv("GOOGLE_CLIENT_ID") or None,
-        google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET") or None,
         razorpay_key_id=os.getenv("RAZORPAY_KEY_ID") or None,
         razorpay_key_secret=os.getenv("RAZORPAY_KEY_SECRET") or None,
         razorpay_webhook_secret=os.getenv("RAZORPAY_WEBHOOK_SECRET") or None,
@@ -130,6 +131,9 @@ def get_settings() -> Settings:
             "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=2.5&minlatitude=20.0&maxlatitude=24.7&minlongitude=68.1&maxlongitude=74.6&orderby=time",
         ).strip(),
         social_replay_file=os.getenv("SOCIAL_REPLAY_FILE", "").strip(),
+        news_rss_enabled=_bool("NEWS_RSS_ENABLED", False),
+        bluesky_search_enabled=_bool("BLUESKY_SEARCH_ENABLED", False),
+        bluesky_search_url=os.getenv("BLUESKY_SEARCH_URL", "").strip(),
         ingest_interval_seconds=max(1, _int("INGEST_INTERVAL_SECONDS", 600)),
     )
 

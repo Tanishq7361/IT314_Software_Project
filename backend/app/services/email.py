@@ -10,6 +10,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from typing import Any
+from urllib.parse import quote
 
 from app.config import get_settings
 
@@ -121,6 +122,37 @@ def send_invitation_email(
 </body>
 </html>"""
     return _send_raw_email(to_email, subject, text, html)
+
+
+def send_verification_email(to_email: str, recipient_name: str) -> bool:
+    """Citizen email-verification STUB (S1-03): the link only goes to the in-memory outbox and is never emailed.
+
+    No token is stored and verification is not enforced; accounts are ACTIVE on registration.
+    With SMTP configured nothing is sent until a /verify-email page and token check exist.
+    """
+    settings = get_settings()
+    if settings.smtp_host:
+        # There is no /verify-email page yet, so a real email would send every new citizen to a dead link.
+        logger.info("Email verification is not implemented yet; no verification email sent")
+        return False
+    link = f"{settings.frontend_url}/verify-email?email={quote(to_email)}"
+    text = f"Hello {recipient_name},\n\nWelcome to ResQ. Confirm your email address: {link}\n"
+    return _send_raw_email(to_email, "Confirm your ResQ account email", text)
+
+
+def send_notification_email(to_email: str, recipient_name: str, title: str, body: str) -> bool:
+    """Email copy of an in-app notification for a citizen who turned email alerts on.
+
+    In-app notifications stay the source of truth; this is a convenience. With no SMTP_HOST it is only
+    outboxed and logged (simulated), like the other emails.
+    """
+    settings = get_settings()
+    text = (
+        f"Hello {recipient_name},\n\n{title}\n\n{body}\n\n"
+        f"See the full status in My Reports: {settings.frontend_url}/my-reports\n\n"
+        "You can turn email alerts off on your account page.\n"
+    )
+    return _send_raw_email(to_email, title[:150], text)
 
 
 def send_password_reset_email(

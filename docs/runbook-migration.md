@@ -91,7 +91,7 @@ Ensure Render web service health check path is configured:
 
 ### Step 7: Frontend Deployment & Smoke Testing
 1. Deploy the Next.js frontend to Vercel with environment variable:
-   - `API_URL`: Base URL of the deployed backend (e.g., `https://drch-backend.onrender.com`).
+   - `NEXT_PUBLIC_API_URL`: Base URL of the deployed backend (e.g., `https://drch-backend.onrender.com`).
 2. Run the non-interactive automated smoke test:
    ```bash
    export SMOKE_STAFF_EMAIL="dispatcher@example.org"

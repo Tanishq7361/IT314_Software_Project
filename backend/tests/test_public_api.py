@@ -72,3 +72,56 @@ def test_bad_parameters_are_422_not_demo_data(client):
 def test_campaigns_and_alerts_shape(client):
     assert client.get("/api/v1/public/campaigns").status_code == 200
     assert client.get("/api/v1/public/alerts").status_code == 200
+
+
+def _insert_content(sql, status: str, title: str, scenario: str = "URBAN_FLOODING") -> None:
+    sql.execute(
+        "INSERT INTO safety_content (scenario, title, body, status, source, published_at) "
+        "VALUES (%s::scenario_type, %s, %s, %s::content_status, 'NDMA guidelines', "
+        "CASE WHEN %s = 'PUBLISHED' THEN now() END)",
+        (scenario, title, "Move to higher ground early and avoid floodwater.", status, status),
+    )
+
+
+def test_public_safety_content_lists_only_published_guidance(client, sql):
+    import uuid
+
+    tag = uuid.uuid4().hex[:8]
+    _insert_content(sql, "PUBLISHED", f"Flood guidance {tag}")
+    _insert_content(sql, "DRAFT", f"Draft guidance {tag}")
+    _insert_content(sql, "ARCHIVED", f"Old guidance {tag}")
+    r = client.get("/api/v1/public/safety-content")
+    assert r.status_code == 200
+    titles = [i["title"] for i in r.json() if tag in i["title"]]
+    assert titles == [f"Flood guidance {tag}"]
+    item = next(i for i in r.json() if tag in i["title"])
+    assert item["source"] == "NDMA guidelines" and item["scenario"] == "urban_flooding"
+    assert not {"author_id", "approved_by", "published_by", "author_name", "approver_name"} & set(item)
+
+
+def test_public_safety_content_filters_by_scenario_and_rejects_unknown(client, sql):
+    import uuid
+
+    tag = uuid.uuid4().hex[:8]
+    _insert_content(sql, "PUBLISHED", f"Cyclone guidance {tag}", "CYCLONE")
+    only_cyclone = client.get("/api/v1/public/safety-content", params={"scenario": "cyclone"}).json()
+    assert any(tag in i["title"] for i in only_cyclone) and all(i["scenario"] == "cyclone" for i in only_cyclone)
+    assert client.get("/api/v1/public/safety-content", params={"scenario": "earthquake"}).status_code == 422
+
+
+def test_public_updates_list_only_published_and_hide_internal_fields(client, sql):
+    import uuid
+
+    tag = uuid.uuid4().hex[:8]
+    for status in ("PUBLISHED", "DRAFT"):
+        sql.execute(
+            "INSERT INTO public_updates (scenario, title, body, area_label, status, published_at) "
+            "VALUES ('URBAN_FLOODING', %s, 'Avoid the underpass until further notice.', 'Ward 12', %s::content_status, "
+            "CASE WHEN %s = 'PUBLISHED' THEN now() END)",
+            (f"{status} update {tag}", status, status),
+        )
+    r = client.get("/api/v1/public/updates")
+    assert r.status_code == 200
+    mine = [i for i in r.json() if tag in i["title"]]
+    assert [i["title"] for i in mine] == [f"PUBLISHED update {tag}"]
+    assert not {"incident_id", "incident_ref", "created_by", "published_by", "author_name"} & set(mine[0])

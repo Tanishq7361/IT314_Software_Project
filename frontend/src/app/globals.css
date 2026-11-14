@@ -10,6 +10,10 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-brand: 'Montserrat', var(--font-geist-sans), system-ui, sans-serif;
+  --color-brand-navy: #0c4a75;
+  --color-brand-sky: #38bdf8;
+  --color-brand-alert: #dc2626;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -23,9 +27,20 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+/* Full-viewport app screens (map, DM workspace) opt in to a fixed, self-scrolling layout. */
+.app-screen {
+  height: 100dvh;
+  width: 100%;
   overflow: hidden;
-  height: 100vh;
-  width: 100vw;
 }
 
 /* ============ GPU ACCELERATED SMOOTH MAP ZOOM & PAN ============ */

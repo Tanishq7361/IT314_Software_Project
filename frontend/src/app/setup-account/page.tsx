@@ -1,6 +1,7 @@
 "use client";
 
 import React, { Suspense, useEffect, useState } from "react";
+import { SiteHeader } from "@/components/Brand";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -142,17 +143,7 @@ function SetupAccountContent() {
 
   return (
     <div className="min-h-screen bg-[#070d18] text-slate-100 flex flex-col font-sans">
-      <header className="h-14 border-b border-slate-800 bg-[#0b1324]/90 backdrop-blur-md px-6 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2.5">
-          <span className="text-xl">🛡️</span>
-          <span className="font-bold text-white text-base tracking-tight">
-            ResQ <span className="font-light text-sky-400">Hub</span>
-          </span>
-        </Link>
-        <div className="text-xs text-slate-400">
-          Staff Account Setup
-        </div>
-      </header>
+      <SiteHeader subtitle="Staff Account Setup" maxWidth="max-w-5xl" />
 
       <main className="flex-1 flex items-center justify-center p-4 py-12">
         <div className="bg-[#0b1324] border border-slate-700/80 rounded-2xl shadow-2xl max-w-lg w-full p-6 sm:p-8 space-y-6">

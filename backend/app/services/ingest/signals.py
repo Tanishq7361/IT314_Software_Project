@@ -64,6 +64,91 @@ def detect_language(value: str) -> str:
     return "en" if any(ch.isalpha() for ch in value) else "und"
 
 
+# Words that make a live text worth a dispatcher's look, limited to the supported scenarios
+# (cyclone, industrial fire, urban flooding). Matching is a cheap pre-filter only; the advisory
+# triage label and the human review decide what the text is about.
+HAZARD_TERMS = (
+    "flood", "waterlog", "inundat", "heavy rain", "cloudburst", "cyclone", "storm surge", "landfall",
+    "fire", "blaze", "blast", "explosion", "gas leak", "chemical leak", "toxic",
+    "પૂર", "વરસાદ", "વાવાઝોડ", "ચક્રવાત", "આગ", "વિસ્ફોટ", "ગેસ લીક",
+    "बाढ़", "बारिश", "चक्रवात", "तूफान", "आग", "विस्फोट", "गैस रिसाव",
+)
+
+# Place names (lower-case) mapped to the Gujarat district whose centroid stands in for the
+# location. Bigger towns and industrial estates are mapped to their district.
+_PLACE_ALIASES = {
+    "baroda": "Vadodara", "kachchh": "Kutch", "bhuj": "Kutch", "gandhidham": "Kutch", "mundra": "Kutch",
+    "kandla": "Kutch", "dahej": "Bharuch", "ankleshwar": "Bharuch", "vapi": "Valsad", "hazira": "Surat",
+    "dwarka": "Devbhoomi Dwarka", "somnath": "Gir Somnath", "veraval": "Gir Somnath",
+    "godhra": "Panchmahal", "halol": "Panchmahal", "nadiad": "Kheda", "palanpur": "Banaskantha",
+    "himmatnagar": "Sabarkantha", "modasa": "Aravalli", "pipavav": "Amreli", "sanand": "Ahmedabad",
+    "અમદાવાદ": "Ahmedabad", "સુરત": "Surat", "વડોદરા": "Vadodara", "રાજકોટ": "Rajkot", "કચ્છ": "Kutch",
+    "ભુજ": "Kutch", "જામનગર": "Jamnagar", "ભાવનગર": "Bhavnagar", "જૂનાગઢ": "Junagadh", "ભરૂચ": "Bharuch",
+    "વલસાડ": "Valsad", "નવસારી": "Navsari", "પોરબંદર": "Porbandar", "ગાંધીનગર": "Gandhinagar",
+    "मोरबी": "Morbi", "अहमदाबाद": "Ahmedabad", "सूरत": "Surat", "वडोदरा": "Vadodara", "राजकोट": "Rajkot",
+    "कच्छ": "Kutch", "जामनगर": "Jamnagar", "भरूच": "Bharuch",
+}
+_STATE_TERMS = ("gujarat", "saurashtra", "ગુજરાત", "સૌરાષ્ટ્ર", "गुजरात", "सौराष्ट्र")
+
+
+# Short Indic words that also begin unrelated words (आगमन "arrival", આગામી "upcoming",
+# પૂરતું "enough"). They match only as a whole word or with a Gujarati case ending.
+_STRICT_INDIC_TERMS = {"આગ", "પૂર", "आग", "बाढ़"}
+_GUJARATI_ENDINGS = ("", "માં", "થી", "નો", "ની", "નું", "ના", "ને", "ે", "ો")
+_TOKEN_RE = re.compile(r"[^\s.,:;!?\"'()\[\]{}|/\\\-–—…]+")
+
+
+def mentions_hazard(text: str) -> bool:
+    lowered = (text or "").lower()
+    loose = [term for term in HAZARD_TERMS if term not in _STRICT_INDIC_TERMS]
+    if any(term in lowered for term in loose):
+        return True
+    tokens = _TOKEN_RE.findall(lowered)
+    return any(
+        token.startswith(term) and token[len(term):] in _GUJARATI_ENDINGS
+        for token in tokens for term in _STRICT_INDIC_TERMS
+    )
+
+
+def _names_in(text: str, names: dict[str, str]) -> set[str]:
+    found = set()
+    for name, district in names.items():
+        if name.isascii():
+            if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", text):
+                found.add(district)
+        elif name in text:  # Gujarati/Hindi case endings attach to the name, so match a substring
+            found.add(district)
+    return found
+
+
+def locate_gujarat_text(text: str) -> dict[str, Any] | None:
+    """Return a district-level location when the text names exactly one Gujarat district.
+
+    The coordinates are the district centroid, never a precise point, and the result says so.
+    Returns None when the text does not mention Gujarat at all. A text that names Gujarat but no
+    single district gets no coordinates, so a dispatcher must add the location before promotion.
+    """
+    from app.geo import district_centroids
+
+    centroids = district_centroids()
+    lowered = (text or "").lower()
+    found = _names_in(lowered, {name.lower(): name for name in centroids} | _PLACE_ALIASES)
+    if not found and not any(term in lowered for term in _STATE_TERMS):
+        return None
+    if len(found) == 1:
+        district = found.pop()
+        lat, lon = centroids[district]
+        return {"location_text": f"{district} district (approximate, named in text)",
+                "latitude": lat, "longitude": lon, "district": district}
+    return {"location_text": "Gujarat (district not identified)", "latitude": None, "longitude": None,
+            "district": None}
+
+
+def stable_uid(*parts: str) -> str:
+    """Hash an external identifier so it never stores an account id or a long URL."""
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:40]
+
+
 class ReplaySignalAdapter(Adapter):
     """Read team-authored replay items; never fetches or stores live user posts."""
 

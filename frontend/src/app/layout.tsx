@@ -18,7 +18,10 @@ const geistMono = localFont({
 export const metadata: Metadata = {
   title: "ResQ | Emergency Disaster Response & Geo-Platform",
   description: "ResQ - Indian Disaster Response Coordination & Real-Time Emergency Mapping Hub",
+  icons: { icon: "/icon.svg" },
 };
+
+export const viewport = { width: "device-width", initialScale: 1 };
 
 export default function RootLayout({
   children,
@@ -28,7 +31,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} antialiased`}
     >
       <head>
         <link
@@ -40,7 +43,7 @@ export default function RootLayout({
           href="https://unpkg.com/leaflet-minimap@3.6.1/dist/Control.MiniMap.min.css"
         />
       </head>
-      <body className="h-full w-full overflow-hidden m-0 p-0 bg-slate-900 font-sans">
+      <body className="m-0 min-h-dvh w-full bg-slate-900 p-0 font-sans">
         {children}
       </body>
     </html>

@@ -36,4 +36,4 @@ Systematically trace and resolve bugs while maintaining system integrity and avo
    python -m ruff check backend/
    ```
 4. Inspect `git diff` to confirm zero collateral changes.
-5. **Git Restriction:** NEVER commit or push. Present root cause, fix explanation, and test results for review.
+5. Present the root cause, fix explanation, and test results for review, and follow `AGENTS.md` sections 5 and 6 for git, commit, PR and issue handling.

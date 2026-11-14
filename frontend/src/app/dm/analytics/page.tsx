@@ -187,10 +187,11 @@ function Body({ d }: { d: Analytics }) {
               <div className="space-y-2 border-t border-border pt-4">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted">Decisions by confidence band</p>
                 <div className="grid gap-3 sm:grid-cols-3 text-xs">
-                  {["HIGH", "MEDIUM", "LOW"].map((band) => {
+                  {["HIGH", "MEDIUM", "LOW", ...(d.ai_by_decision.some((r) => r.confidence_band === "UNKNOWN") ? ["UNKNOWN"] : [])].map((band) => {
                     const bandRows = d.ai_by_decision!.filter((r) => r.confidence_band === band);
                     const totalBand = sum(bandRows, (r) => r.n);
-                    const bandLabel = band === "HIGH" ? "High (≥80%)" : band === "MEDIUM" ? "Medium (60–79%)" : "Low (<60%)";
+                    const bandLabel =
+                      band === "HIGH" ? "High (≥80%)" : band === "MEDIUM" ? "Medium (60–79%)" : band === "LOW" ? "Low (<60%)" : "No confidence recorded";
                     return (
                       <div key={band} className="rounded-lg border border-border p-3 bg-surface-muted/30">
                         <div className="flex justify-between font-semibold">
@@ -212,6 +213,32 @@ function Body({ d }: { d: Analytics }) {
                       </div>
                     );
                   })}
+                </div>
+                {d.definitions.confidence_bands && <p className="text-[11px] text-muted">{d.definitions.confidence_bands}</p>}
+                <div className="overflow-x-auto pt-2">
+                  <table className="w-full min-w-[420px] text-xs">
+                    <caption className="sr-only">AI suggestions by scenario and human decision</caption>
+                    <thead className="text-left text-muted">
+                      <tr>
+                        <th scope="col" className="py-1 font-medium">Scenario</th>
+                        {["ACCEPTED", "MODIFIED", "REJECTED", "UNDECIDED"].map((act) => (
+                          <th key={act} scope="col" className="py-1 text-right font-medium">{label(act)}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {[...new Set(d.ai_by_decision.map((r) => r.scenario))].map((sc) => (
+                        <tr key={sc}>
+                          <th scope="row" className="py-1.5 text-left font-normal">{scenarioLabel[sc] ?? label(sc)}</th>
+                          {["ACCEPTED", "MODIFIED", "REJECTED", "UNDECIDED"].map((act) => (
+                            <td key={act} className="py-1.5 text-right tabular-nums">
+                              {sum(d.ai_by_decision!.filter((r) => r.scenario === sc && r.human_action === act), (r) => r.n)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}

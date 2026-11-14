@@ -1,4 +1,4 @@
-# Sprint 3 Security, RBAC and Privacy Review (S3-02)
+# Security, RBAC and Privacy Review
 
 Owner: Siddh. Inputs still needed from others are marked **Open**.
 
@@ -6,7 +6,7 @@ Owner: Siddh. Inputs still needed from others are marked **Open**.
 
 | Item | Status | Evidence |
 |---|---|---|
-| Role matrix (public, citizen, field, dispatcher, admin) against every route group | Done | `backend/tests/test_rbac_matrix.py` is generated from the live route table; a new route without a guard fails it |
+| Role matrix (public, citizen, field, dispatcher, admin) against every route group | Done | `backend/tests/test_rbac_matrix.py` is generated from the live route table; a new route without a guard fails it. Admin (`APP_MGMT`) added: `test_admin_has_no_operational_access` (403 on every `/dm`, `/field`, `/me`, `/incidents` route) and `test_only_admin_or_supervisor_passes_the_invitation_guard`. The DB-backed matrix runs in CI's PostGIS job; read its result there |
 | `/public/*` contains no personal data, coordinates rounded to 4 decimals | Done | `test_public_api.py::test_no_pii_and_coordinates_rounded`, `test_security_review.py::test_public_routes_expose_no_personal_data` |
 | `/me/*` contains no reporter identity or dispatcher-internal fields | Done | `test_security_review.py::test_me_routes_expose_no_personal_or_internal_data` |
 | BFF proxies (`citizen`, `dm`, `field`, `session`) reject cross-site writes | Done | each handler checks `Origin` against the request host and returns 403 `CSRF_REJECTED`; `test_every_bff_proxy_rejects_cross_site_writes` fails if a new proxy lacks the check |
@@ -33,5 +33,6 @@ Revisit at the freeze (S3-18): any HIGH or CRITICAL finding with a fix available
 |---|---|---|---|
 | F-1 | Dependency and image scans are advisory only | Low | Accepted for the course timeline; reviewed manually at the freeze |
 | F-2 | In-memory rate limiter is per process (`backend/app/ratelimit.py`), so limits are per Render instance | Low | Accepted: single free-tier instance |
+| F-3 | The admin role (`APP_MGMT`) was not exercised by the role matrix, so an operational route that accepted any staff role would have gone unnoticed | Low | Fixed: admin rows added to `test_rbac_matrix.py` |
 
 Add new rows here as the Open items above come back.

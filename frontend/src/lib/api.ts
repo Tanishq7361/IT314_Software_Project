@@ -35,8 +35,10 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
   const { body, idempotencyKey, headers: inputHeaders, ...requestOptions } = options;
   const headers = new Headers(inputHeaders);
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+  // Files and other binary bodies must be sent untouched; JSON.stringify would turn a File into "{}".
+  const isBinary = (typeof Blob !== "undefined" && body instanceof Blob) || body instanceof ArrayBuffer;
 
-  if (body !== undefined && !isFormData && !headers.has("content-type")) {
+  if (body !== undefined && !isFormData && !isBinary && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
   if (idempotencyKey) headers.set("idempotency-key", idempotencyKey);
@@ -44,7 +46,7 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
   const response = await fetch(`/api/dm/${path.replace(/^\/+/, "")}`, {
     ...requestOptions,
     headers,
-    body: body === undefined ? undefined : isFormData || typeof body === "string" ? body : JSON.stringify(body),
+    body: body === undefined ? undefined : isFormData || isBinary || typeof body === "string" ? (body as BodyInit) : JSON.stringify(body),
   });
 
   const text = response.status === 204 ? "" : await response.text();

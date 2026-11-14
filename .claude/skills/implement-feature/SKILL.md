@@ -21,12 +21,8 @@ Follow this structured workflow to implement features safely within DRCH:
   - Frontend: `ui.tsx`, `badges.tsx`, `LiveOperationsLayer.tsx`, `ResQContext.tsx`, `lib/api.ts`.
 - **Never create duplicate files or duplicate logic.**
 
-## 3. Strict DRCH Technical Constraints
-- **Database:** Neon PostgreSQL 16 with PostGIS. Zero Supabase dependencies or Supabase Auth.
-- **Concurrency:** When modifying resource quantities, always lock rows via `SELECT ... FOR UPDATE`.
-- **AI Integration:** Keep AI triage advisory. Store suggestions in `triage_results`. Never bypass human dispatcher verification.
-- **Auditability:** Record all state changes in `audit_logs` using `app.audit.log_audit_event()`.
-- **Privacy:** Never leak citizen reporter PII. Round coordinates on public feeds to 4 decimal places.
+## 3. DRCH Technical Constraints
+Follow `AGENTS.md` section 4 and the matching `.agents/rules/*.md` file. Record state changes with `app.audit.log_audit_event()`.
 
 ## 4. Execution & Verification
 1. Make minimal, targeted changes.
@@ -36,4 +32,4 @@ Follow this structured workflow to implement features safely within DRCH:
    python -m pytest backend/tests/test_units.py -v
    ```
 4. Inspect the full `git diff` to ensure no accidental files or unintended modifications.
-5. **Git Restriction:** NEVER commit or push. Present changes cleanly for human review.
+5. Present changes for human review and follow `AGENTS.md` sections 5 and 6 for git, commit, PR and issue handling.

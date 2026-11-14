@@ -9,9 +9,14 @@ services:
     autoDeploy: false
 
     healthCheckPath: /api/v1/health   # also reports database reachability
+    # Only keys without a built-in default are listed. Every `sync: false` key is entered in the
+    # Render dashboard; see docs/env-variables.md for the rest (SMTP_PORT, PAYMENT_GATEWAY, USGS_FEED_URL,
+    # INGEST_INTERVAL_SECONDS, NEWS_RSS_ENABLED and BLUESKY_SEARCH_ENABLED all default correctly).
     envVars:
+      # staging keeps every startup secret check but allows the sandbox (mock) donation flow,
+      # which APP_ENV=production refuses. Switch to production only with a real gateway.
       - key: APP_ENV
-        value: production
+        value: staging
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
@@ -22,19 +27,44 @@ services:
         sync: false
       - key: CORS_ALLOWED_ORIGINS
         sync: false          # e.g. https://your-app.vercel.app
+      - key: FRONTEND_URL
+        sync: false          # same Vercel URL; used in invitation and password-reset email links
       - key: AI_TRIAGE_URL
-        sync: false
+        sync: false          # https://<ai-service>.onrender.com/triage; empty = triage unavailable
       - key: AI_TRIAGE_TOKEN
         sync: false
       - key: GOOGLE_MAPS_API_KEY
         sync: false
-      - key: PAYMENT_GATEWAY
-        value: mock
+      - key: GOOGLE_CLIENT_ID
+        sync: false          # same value as NEXT_PUBLIC_GOOGLE_CLIENT_ID on Vercel; empty = Google sign-in off
+      - key: SMTP_HOST
+        sync: false          # empty = emails are only logged, not sent
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
       - key: MOCK_GATEWAY_SECRET
         sync: false
       - key: SACHET_FEED_URL
-        sync: false
-      - key: USGS_FEED_URL
-        value: https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minmagnitude=2.5&minlatitude=20.0&maxlatitude=24.7&minlongitude=68.1&maxlongitude=74.6&orderby=time
-      - key: INGEST_INTERVAL_SECONDS
-        value: "600"
+        value: https://sachet.ndma.gov.in/cap_public_website/rss/rss_gujarat.xml
+
+  # S2-06 / S3-12: advisory triage service (ai-workers image, published by cd.yml). The backend reaches it
+  # through AI_TRIAGE_URL = https://<this service>.onrender.com/triage. Both services must share the same
+  # AI_TRIAGE_TOKEN value. Without this service the backend answers triage with UNAVAILABLE and staff
+  # continue manually. The service is advisory only: it never changes an incident.
+  - type: web
+    name: drch-ai-triage
+    runtime: image
+    image:
+      url: ghcr.io/siddhcreator-1706/it314_software_project/drch_ai_workers:latest
+    plan: free
+    region: ohio
+    autoDeploy: false
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "8001"        # the image listens on 8001 (ai-workers/Dockerfile)
+      - key: AI_TRIAGE_TOKEN
+        sync: false          # same value as AI_TRIAGE_TOKEN on drch-backend

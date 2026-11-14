@@ -7,11 +7,31 @@ body:
     attributes:
       value: |
         Please describe a software improvement. Do not include real emergency reports, personal information, credentials, or other sensitive data.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the platform would change?
+      options:
+        - Citizen reporting
+        - Public map
+        - Dispatcher console (/dm)
+        - Field team
+        - Authentication / roles
+        - Ingestion / alerts
+        - Payments / donations
+        - AI triage
+        - Database / migrations
+        - CI/CD / deployment
+        - Documentation
+        - Other
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:
       label: Problem or need
-      description: What user need or problem would this feature address?
+      description: What user need or problem would this feature address, and for which role (citizen, dispatcher, field team, admin)?
     validations:
       required: true
   - type: textarea
@@ -22,9 +42,36 @@ body:
     validations:
       required: true
   - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How will we know it is done? List testable conditions.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
       description: Any alternative approaches or workarounds you have considered.
     validations:
       required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Related sprint task or context
+      description: Sprint task ID (for example S3-02), related issues or PRs, and any scenario involved (cyclone, industrial fire, urban flooding).
+    validations:
+      required: false
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project constraints
+      description: Confirm the proposal respects these rules.
+      options:
+        - label: It keeps AI output advisory; verification, dispatch, escalation and closure still need a human dispatcher.
+          required: true
+        - label: It does not expose reporter personal data publicly and does not require Supabase Auth or Supabase-specific SQL.
+          required: true

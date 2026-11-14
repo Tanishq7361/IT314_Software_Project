@@ -549,6 +549,11 @@ def district_for(
     return None
 
 
+def district_centroids() -> dict[str, tuple[float, float]]:
+    """Static (lat, lon) centroid of every Gujarat district, keyed by district name."""
+    return {district: (lat, lon) for district, lat, lon in _DISTRICT_CENTROIDS}
+
+
 def get_known_districts(conn: Any = None, state: str = "Gujarat") -> list[str]:
     """Retrieve all dynamically registered districts from PostGIS."""
     if conn is not None:

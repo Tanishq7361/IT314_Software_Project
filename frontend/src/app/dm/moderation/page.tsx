@@ -23,6 +23,7 @@ type Item = {
   uploaded_at: string;
   age_seconds: number;
   uploaded_by_name: string;
+  has_preview: boolean;
   last_reason: string | null;
 };
 
@@ -80,9 +81,22 @@ export default function ModerationPage() {
             <ul className="divide-y divide-border">
               {data.items.map((item) => (
                 <li key={item.evidence_id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center">
-                  <div className="grid size-14 shrink-0 place-items-center rounded-lg border border-dashed border-border text-[10px] text-muted" aria-hidden>
-                    {item.moderation_state === "QUARANTINED" ? "Hidden" : "No preview"}
-                  </div>
+                  {item.has_preview ? (
+                    // Opened on request only, never loaded automatically: each view is audited.
+                    <a
+                      href={`/api/dm/moderation/${item.evidence_id}/content`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="grid size-14 shrink-0 place-items-center rounded-lg border border-border text-center text-[11px] font-medium text-info hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+                      aria-label={`View photo ${item.file_name} in a new tab`}
+                    >
+                      View photo
+                    </a>
+                  ) : (
+                    <div className="grid size-14 shrink-0 place-items-center rounded-lg border border-dashed border-border text-[10px] text-muted" aria-hidden>
+                      No preview
+                    </div>
+                  )}
                   <div className="min-w-0 flex-1 text-sm">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-medium">{item.file_name}</span>

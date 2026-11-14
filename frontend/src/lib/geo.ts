@@ -8,6 +8,12 @@ export const GUJARAT_BOUNDS: [[number, number], [number, number]] = [
   [24.7, 74.5], // North-East
 ];
 
+/** Whole of India (including the islands) with a small margin: how far the public map may be zoomed out and panned. */
+export const INDIA_BOUNDS: [[number, number], [number, number]] = [
+  [6.0, 67.5], // South-West
+  [37.5, 98.0], // North-East
+];
+
 export const GUJARAT_CENTER: [number, number] = [22.2587, 71.1924];
 export const GUJARAT_DEFAULT_ZOOM = 7;
 

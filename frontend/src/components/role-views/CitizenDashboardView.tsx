@@ -1,8 +1,12 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { SiteHeader } from "../Brand";
 import { DisasterCategory } from "../../types/resq";
+import { InformationRequestReply } from "@/components/citizen/InformationRequestReply";
 import * as CitizenApi from "../../services/citizenApi";
+import { LanguageCode, TRANSLATIONS } from "@/lib/citizenI18n";
+import { GUJARAT_CENTER, isInGujarat } from "@/lib/geo";
 
 interface CitizenDashboardViewProps {
   currentUser?: { id: string; name: string; phone?: string; email?: string } | null;
@@ -36,7 +40,10 @@ function statusBadge(status: string) {
     case "LINKED_TO_INCIDENT":
       return { label: "Help Dispatched", bg: "bg-sky-50 text-sky-700 border-sky-200" };
     case "PENDING":
+    case "SUBMITTED":
       return { label: "Under Review", bg: "bg-amber-50 text-amber-700 border-amber-200" };
+    case "NEEDS_INFORMATION":
+      return { label: "Info Requested", bg: "bg-orange-50 text-orange-700 border-orange-300" };
     case "NEEDS_FIELD_CHECK":
       return { label: "Field Check", bg: "bg-purple-50 text-purple-700 border-purple-200" };
     case "REJECTED":
@@ -98,6 +105,32 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
   const currentUser = useMemo(() => propUser ?? { id: "GUEST", name: "Citizen" }, [propUser]);
   const logout = onSignOut || (() => {});
 
+  // Language state (persisted)
+  const [lang, setLang] = useState<LanguageCode>("en");
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("resq_lang") as LanguageCode | null;
+      if (saved && (saved === "en" || saved === "hi" || saved === "gu")) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- restore the saved language after mount (localStorage is client-only)
+        setLang(saved);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const changeLang = (l: LanguageCode) => {
+    setLang(l);
+    try {
+      localStorage.setItem("resq_lang", l);
+    } catch {
+      // ignore
+    }
+  };
+
+  const t = TRANSLATIONS[lang];
+
   // Navigation tab
   const [activeTab, setActiveTab] = useState<CitizenTabId>("overview");
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
@@ -112,12 +145,17 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
   const [showNotifications, setShowNotifications] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Form state
+  // SOS state
+  const [sosLoading, setSosLoading] = useState(false);
+  const [sosBanner, setSosBanner] = useState<{ message: string; ref?: string; isError?: boolean } | null>(null);
+
+  // Form state - Default to Gujarat Center (Ahmedabad/Gandhinagar)
   const [formCategory, setFormCategory] = useState<DisasterCategory>("Flood / Urban Flood");
   const [formDescription, setFormDescription] = useState("");
   const [formLocation, setFormLocation] = useState("");
-  const [formLat, setFormLat] = useState(20.5937);
-  const [formLon, setFormLon] = useState(78.9629);
+  const [formLat, setFormLat] = useState(23.0225);
+  const [formLon, setFormLon] = useState(72.5714);
+  const [gpsError, setGpsError] = useState<string | null>(null);
   const [formAffected, setFormAffected] = useState(1);
   const [formNeeds, setFormNeeds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -136,7 +174,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
     setRefreshKey((k) => k + 1);
   }, []);
 
-  // Fetch live data. There is NO demo fallback: on failure the lists stay empty and the offline banner shows.
+  // Fetch live data on mount and refreshKey change
   useEffect(() => {
     if (!currentUser || currentUser.id === "GUEST-000") return;
 
@@ -164,6 +202,21 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
     };
   }, [currentUser, refreshKey]);
 
+  // Real-time polling for notifications and alerts every 20 seconds
+  useEffect(() => {
+    if (!currentUser || currentUser.id === "GUEST-000") return;
+    const interval = setInterval(() => {
+      CitizenApi.fetchMyNotifications().then((res) => {
+        if (res.data?.items) setNotifications(res.data.items);
+      });
+      CitizenApi.fetchPublicAlerts().then((res) => {
+        if (res.data) setPublicAlerts(res.data);
+      });
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
   const unreadCount = notifications.filter((n) => !n.read_at).length;
 
   const handleMarkAsRead = async (id: string) => {
@@ -177,13 +230,102 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
     }
   };
 
-  // Geolocation for report form
+  const handleMarkAllRead = async () => {
+    const unread = notifications.filter((n) => !n.read_at);
+    if (!unread.length) return;
+    try {
+      await Promise.all(unread.map((n) => CitizenApi.markNotificationRead(n.notification_id).catch(() => null)));
+      setNotifications((prev) =>
+        prev.map((n) => ({ ...n, read_at: n.read_at || new Date().toISOString() }))
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  // SOS Emergency Broadcast Handler
+  const handleBroadcastSos = async () => {
+    const confirmPrompt =
+      t.sosDisclaimer +
+      "\n\n" +
+      (lang === "gu"
+        ? "શું તમે તાત્કાલિક આપાતકાલીન SOS મોકલવા માંગો છો?"
+        : lang === "hi"
+        ? "क्या आप तत्काल आपातकालीन SOS भेजना चाहते हैं?"
+        : "Do you want to broadcast an emergency SOS now?");
+
+    if (!window.confirm(confirmPrompt)) {
+      return;
+    }
+
+    setSosLoading(true);
+    setSosBanner(null);
+
+    let lat = formLat;
+    let lon = formLon;
+
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 5000,
+          });
+        });
+        lat = pos.coords.latitude;
+        lon = pos.coords.longitude;
+      } catch {
+        if (!isInGujarat(lat, lon)) {
+          lat = GUJARAT_CENTER[0];
+          lon = GUJARAT_CENTER[1];
+        }
+      }
+    }
+
+    try {
+      const payload: CitizenApi.IncidentReportPayload = {
+        scenario: "urban_flooding",
+        description: `CRITICAL SOS BROADCAST: Citizen ${currentUser.name} triggered one-tap emergency distress signal via ResQ citizen dashboard. Immediate response / rescue required.`,
+        people_affected: 1,
+        location_source: "GPS",
+        latitude: lat,
+        longitude: lon,
+        address_text: "Emergency SOS Broadcast Location (Gujarat)",
+        details: { urgent_needs: ["Medical Evacuation", "Rescue Boats"] },
+      };
+
+      const res = await CitizenApi.createReport(payload, { idempotencyKey: crypto.randomUUID() });
+      if (res.data?.incident_ref) {
+        setSosBanner({
+          message: `${t.sosSuccess} (Ref: ${res.data.incident_ref})`,
+          ref: res.data.incident_ref,
+        });
+        handleRefresh();
+      } else {
+        setSosBanner({
+          message: res.error || "Failed to transmit SOS broadcast. Please dial 112 directly.",
+          isError: true,
+        });
+      }
+    } catch {
+      setSosBanner({
+        message: "Network error sending SOS. Please dial 112 immediately.",
+        isError: true,
+      });
+    } finally {
+      setSosLoading(false);
+    }
+  };
+
+  // Geolocation for report form (respects Gujarat bounds)
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          setFormLat(pos.coords.latitude);
-          setFormLon(pos.coords.longitude);
+          if (isInGujarat(pos.coords.latitude, pos.coords.longitude)) {
+            setFormLat(pos.coords.latitude);
+            setFormLon(pos.coords.longitude);
+          }
         },
         () => {},
         { enableHighAccuracy: false, timeout: 5000 }
@@ -225,8 +367,8 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
         if (!L) return;
 
         const map = L.map(compactMapContainerRef.current, {
-          center: [22.5, 80],
-          zoom: 5,
+          center: [22.2587, 71.1924],
+          zoom: 7,
           zoomControl: true,
           attributionControl: false,
         });
@@ -293,6 +435,9 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
   }, [publicIncidents]);
 
   // Report Submission Handler
+  // One Idempotency-Key per report draft: retries reuse it, a successful submit starts a new draft.
+  const reportKeyRef = useRef<string>(crypto.randomUUID());
+
   const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
@@ -320,9 +465,10 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
       details: { urgent_needs: formNeeds },
     };
 
-    const res = await CitizenApi.createReport(payload, { idempotencyKey: crypto.randomUUID() });
+    const res = await CitizenApi.createReport(payload, { idempotencyKey: reportKeyRef.current });
 
     if (res.data) {
+      reportKeyRef.current = crypto.randomUUID();
       setSubmitResult({ success: true, reportId: res.data.incident_ref });
       setFormDescription("");
       setFormLocation("");
@@ -395,45 +541,57 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
       `}</style>
 
       {/* ─── Blue Header (ResQ AI Bhuvan-inspired Identity) ─── */}
-      <header className="h-14 bg-[#0c4a75] border-b border-[#093554] px-4 md:px-8 flex items-center justify-between text-white shadow-md sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-sky-400/20 border border-white/70 flex items-center justify-center text-lg shadow-inner">
-            🛡️
-          </div>
-          <div>
-            <div className="flex items-baseline gap-2 leading-none">
-              <span className="text-lg font-extrabold tracking-tight text-white">ResQ</span>
-              <span className="text-xs font-light text-sky-200">Citizen Safety Portal</span>
-              <span className="hidden sm:inline-block text-[9.5px] uppercase font-bold bg-sky-900/90 text-sky-200 px-1.5 py-0.5 rounded border border-sky-700/60">
-                Public User
-              </span>
-            </div>
-            <div className="text-[10px] text-sky-200/80 leading-tight mt-0.5 hidden sm:block">
-              ResQ • Emergency Services (112)
-            </div>
-          </div>
-        </div>
-
+      <SiteHeader subtitle="Citizen Safety Portal" brandHref="/" maxWidth="max-w-none">
         <div className="flex items-center gap-2.5">
+          {/* Trilingual Language Selector */}
+          <div className="flex items-center rounded-full bg-sky-950/70 p-0.5 border border-sky-600/50 text-[11px] font-bold">
+            {(["en", "hi", "gu"] as const).map((code) => (
+              <button
+                key={code}
+                onClick={() => changeLang(code)}
+                className={`px-2 py-0.5 rounded-full transition cursor-pointer text-[10.5px] ${
+                  lang === code
+                    ? "bg-white text-sky-950 shadow-xs font-black"
+                    : "text-sky-200 hover:text-white font-medium"
+                }`}
+                title={code === "en" ? "English" : code === "hi" ? "हिन्दी" : "ગુજરાતી"}
+              >
+                {code === "en" ? "EN" : code === "hi" ? "हिन्दी" : "ગુજરાતી"}
+              </button>
+            ))}
+          </div>
+
+          {/* Quick Emergency SOS Broadcast Button */}
+          <button
+            onClick={handleBroadcastSos}
+            disabled={sosLoading}
+            className="flex items-center gap-1.5 bg-red-600 hover:bg-red-500 active:scale-95 text-white px-2.5 sm:px-3.5 py-1 rounded-full text-xs font-extrabold shadow-md shadow-red-600/30 transition cursor-pointer shrink-0 animate-pulse"
+            title={t.sosDisclaimer}
+          >
+            <span className="text-sm">🚨</span>
+            <span className="hidden md:inline">{sosLoading ? t.sosBroadcasting : t.sosButton}</span>
+            <span className="md:hidden">SOS</span>
+          </button>
+
           {backendOnline !== null && (
             <span
-              className={`hidden md:inline-flex items-center gap-1.5 text-[10.5px] px-2.5 py-0.5 rounded-full border font-medium ${
+              className={`hidden xl:inline-flex items-center gap-1.5 text-[10.5px] px-2.5 py-0.5 rounded-full border font-medium ${
                 backendOnline
                   ? "bg-emerald-950/40 text-emerald-300 border-emerald-600/40"
                   : "bg-amber-950/40 text-amber-300 border-amber-600/40"
               }`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${backendOnline ? "bg-emerald-400" : "bg-amber-400"}`} />
-              {backendOnline ? "Backend Live" : "Local Storage"}
+              {backendOnline ? t.backendLive : t.localStorageMode}
             </span>
           )}
 
           {/* Citizen Profile Pill */}
-          <div className="flex items-center gap-2 bg-sky-900/50 border border-sky-700/50 px-3 py-1 rounded-full text-xs">
+          <div className="flex items-center gap-2 bg-sky-900/50 border border-sky-700/50 px-2.5 sm:px-3 py-1 rounded-full text-xs">
             <span className="w-5 h-5 rounded-full bg-sky-500/30 text-sky-200 flex items-center justify-center text-[11px] font-bold">
               {currentUser.name.charAt(0)}
             </span>
-            <span className="font-medium text-white max-w-[120px] truncate">{currentUser.name}</span>
+            <span className="font-medium text-white max-w-[90px] sm:max-w-[120px] truncate">{currentUser.name}</span>
           </div>
 
           {/* Optional View Public Map Button */}
@@ -444,7 +602,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
               title="Open Full National Bhuvan-Style Map"
             >
               <span>🗺️</span>
-              <span>Full Map View</span>
+              <span>{t.fullMapView}</span>
             </button>
           )}
 
@@ -455,7 +613,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
               className="bg-sky-800/60 hover:bg-sky-700 text-sky-100 px-3 py-1 rounded-full text-xs font-medium border border-sky-600/50 transition cursor-pointer"
               title="Close Dashboard"
             >
-              ✕ Close
+              ✕ {t.close}
             </button>
           )}
 
@@ -464,7 +622,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
             <button
               onClick={() => setShowNotifications(!showNotifications)}
               className="relative p-1.5 rounded-full hover:bg-sky-800/60 text-sky-100 transition cursor-pointer"
-              title="Notifications"
+              title={t.notifications}
               aria-label="View notifications"
             >
               <svg className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -482,17 +640,27 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
               <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-xl border border-slate-200 bg-white p-3 shadow-xl z-50 text-slate-900">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                    Notifications ({unreadCount} unread)
+                    {t.notifications} ({unreadCount} unread)
                   </span>
-                  <button
-                    onClick={() => setShowNotifications(false)}
-                    className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
-                  >
-                    ✕
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {unreadCount > 0 && (
+                      <button
+                        onClick={handleMarkAllRead}
+                        className="text-[10.5px] text-sky-700 hover:text-sky-900 font-semibold cursor-pointer"
+                      >
+                        {t.markAllRead}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowNotifications(false)}
+                      className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 {notifications.length === 0 ? (
-                  <p className="py-6 text-center text-xs text-slate-400">No notifications yet.</p>
+                  <p className="py-6 text-center text-xs text-slate-400">{t.noNotifications}</p>
                 ) : (
                   <div className="max-h-72 overflow-y-auto space-y-2">
                     {notifications.map((item) => {
@@ -513,7 +681,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                                 onClick={() => handleMarkAsRead(item.notification_id)}
                                 className="text-[10px] text-sky-600 hover:text-sky-800 font-medium shrink-0 cursor-pointer"
                               >
-                                Mark read
+                                {t.markRead}
                               </button>
                             )}
                           </div>
@@ -535,24 +703,76 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
             onClick={onSignOut || logout}
             className="bg-red-700/80 hover:bg-red-600 text-white text-xs px-3 py-1 rounded-full font-medium transition cursor-pointer shadow-xs"
           >
-            Sign Out
+            {t.signOut}
           </button>
         </div>
-      </header>
+      </SiteHeader>
+
+      {/* ─── Active Critical Advisory Top Banner ─── */}
+      {publicAlerts.length > 0 && (
+        <div className="bg-gradient-to-r from-red-700 via-rose-700 to-amber-700 text-white px-4 md:px-8 py-2 text-xs font-semibold shadow-sm flex items-center justify-between">
+          <div className="max-w-7xl mx-auto w-full flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="animate-pulse text-base">⚠️</span>
+              <span className="truncate">
+                <strong>{t.activeAdvisories}:</strong> {publicAlerts[0].title} — {publicAlerts[0].description}
+              </span>
+            </div>
+            <button
+              onClick={() => setActiveTab("safety")}
+              className="text-[11px] font-bold bg-white/20 hover:bg-white/30 text-white px-2.5 py-0.5 rounded-full shrink-0 transition"
+            >
+              {t.tabSafety} →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── SOS Feedback Banner (if triggered) ─── */}
+      {sosBanner && (
+        <div
+          className={`px-4 md:px-8 py-3 text-xs md:text-sm font-semibold border-b ${
+            sosBanner.isError
+              ? "bg-red-900 text-white border-red-950"
+              : "bg-emerald-800 text-white border-emerald-900"
+          }`}
+        >
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-base">{sosBanner.isError ? "❌" : "✅"}</span>
+              <span>{sosBanner.message}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href="tel:112"
+                className="bg-white text-red-700 font-black px-3 py-1 rounded-md text-xs hover:bg-red-50 transition"
+              >
+                📞 Dial 112
+              </a>
+              <button
+                onClick={() => setSosBanner(null)}
+                className="text-white hover:text-slate-200 text-xs px-1.5"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── Top Welcome & Summary Section ─── */}
       <section className="bg-white border-b border-slate-200 px-4 md:px-8 py-5">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-xl md:text-2xl font-bold text-slate-900">
-              Welcome, {currentUser.name.split(" ")[0]} 👋
+              {t.welcome}, {currentUser.name.split(" ")[0]} 👋
             </h1>
             <p className="text-xs md:text-sm text-slate-500 mt-0.5">
-              Citizen Emergency & Disaster Response Workspace • Report emergencies and track real-time resolution
+              {t.workspaceSubtitle}
             </p>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
             {/* Primary Action Button: Report Disaster */}
             <button
               onClick={() => {
@@ -560,10 +780,10 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                 setSubmitResult(null);
                 if (onOpenCitizenReport) onOpenCitizenReport();
               }}
-              className="bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm shadow-md hover:shadow-lg shadow-red-600/25 transition cursor-pointer flex items-center gap-2 group"
+              className="bg-red-600 hover:bg-red-500 text-white px-4 sm:px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm shadow-md hover:shadow-lg shadow-red-600/25 transition cursor-pointer flex items-center gap-2 group"
             >
               <span className="text-base group-hover:scale-110 transition-transform">🚨</span>
-              <span>Report a Disaster</span>
+              <span>{t.reportDisasterBtn}</span>
             </button>
 
             <button
@@ -572,7 +792,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
               title="Refresh reports and incident telemetry"
             >
               <span>↻</span>
-              <span className="hidden sm:inline">Refresh</span>
+              <span className="hidden sm:inline">{t.refreshBtn}</span>
             </button>
           </div>
         </div>
@@ -585,7 +805,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
             </div>
             <div>
               <div className="text-xl font-extrabold text-slate-900">{myReports.length}</div>
-              <div className="text-[11px] font-medium text-slate-500">My Reports</div>
+              <div className="text-[11px] font-medium text-slate-500">{t.myReportsCount}</div>
             </div>
           </div>
 
@@ -595,7 +815,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
             </div>
             <div>
               <div className="text-xl font-extrabold text-slate-900">{pendingReportsCount}</div>
-              <div className="text-[11px] font-medium text-slate-500">Under Review</div>
+              <div className="text-[11px] font-medium text-slate-500">{t.underReviewCount}</div>
             </div>
           </div>
 
@@ -605,7 +825,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
             </div>
             <div>
               <div className="text-xl font-extrabold text-slate-900">{verifiedReportsCount}</div>
-              <div className="text-[11px] font-medium text-slate-500">Verified / Dispatched</div>
+              <div className="text-[11px] font-medium text-slate-500">{t.verifiedCount}</div>
             </div>
           </div>
 
@@ -615,7 +835,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
             </div>
             <div>
               <div className="text-xl font-extrabold text-slate-900">{activeAlertsCount}</div>
-              <div className="text-[11px] font-medium text-slate-500">Safety Advisories</div>
+              <div className="text-[11px] font-medium text-slate-500">{t.activeAlertsCount}</div>
             </div>
           </div>
         </div>
@@ -625,10 +845,10 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
       <div className="bg-white border-b border-slate-200 px-4 md:px-8">
         <div className="max-w-7xl mx-auto flex gap-2 overflow-x-auto">
           {[
-            { id: "overview" as const, label: "Dashboard Overview", icon: "🏠" },
-            { id: "report" as const, label: "Report a Disaster", icon: "🚨" },
-            { id: "reports" as const, label: `My Reports (${myReports.length})`, icon: "📋" },
-            { id: "safety" as const, label: "Public Safety & Shelters", icon: "🛡️" },
+            { id: "overview" as const, label: t.tabOverview, icon: "🏠" },
+            { id: "report" as const, label: t.tabReport, icon: "🚨" },
+            { id: "reports" as const, label: `${t.tabMyReports} (${myReports.length})`, icon: "📋" },
+            { id: "safety" as const, label: t.tabSafety, icon: "🛡️" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -660,11 +880,11 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
               <div className="bg-gradient-to-r from-red-600 via-rose-600 to-orange-600 text-white rounded-2xl p-5 md:p-6 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 text-xs font-semibold bg-white/20 backdrop-blur-xs px-2.5 py-0.5 rounded-full w-max">
-                    <span>📢</span> Immediate Assistance Hotline: 112
+                    <span>📢</span> {t.call112}
                   </div>
                   <h2 className="text-lg md:text-xl font-bold">Experiencing a Life-Threatening Emergency?</h2>
                   <p className="text-xs text-white/90 max-w-xl">
-                    Submit a geo-tagged incident distress signal directly into the NDMA Multi-Agency Coordination Hub.
+                    {t.sosDisclaimer}
                   </p>
                 </div>
                 <button
@@ -674,8 +894,63 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                   }}
                   className="bg-white hover:bg-slate-100 text-red-700 font-bold px-5 py-2.5 rounded-xl text-xs md:text-sm shadow transition cursor-pointer shrink-0"
                 >
-                  Start SOS Report →
+                  {t.reportDisasterBtn} →
                 </button>
+              </div>
+
+              {/* 24x7 Gujarat Emergency Helplines Quick-Dial Widget */}
+              <div className="bg-gradient-to-br from-sky-900 to-[#0c4a75] text-white rounded-2xl p-5 shadow-sm">
+                <div className="flex items-center justify-between pb-3 border-b border-sky-800/80 mb-3.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">📞</span>
+                    <h3 className="text-sm font-bold">{t.helplineTitle}</h3>
+                  </div>
+                  <span className="text-[10px] font-extrabold uppercase bg-emerald-500 text-white px-2 py-0.5 rounded-full">
+                    {t.tollFree}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <a
+                    href="tel:112"
+                    className="p-3 rounded-xl bg-white/10 hover:bg-white/20 transition flex items-center justify-between border border-white/15"
+                  >
+                    <div>
+                      <div className="font-extrabold text-sm text-white">112</div>
+                      <div className="text-[10.5px] text-sky-200">National Emergency (Police, Fire, Medical)</div>
+                    </div>
+                    <span className="text-xs bg-red-600 font-bold px-2.5 py-1 rounded-lg shadow-xs">Call</span>
+                  </a>
+                  <a
+                    href="tel:108"
+                    className="p-3 rounded-xl bg-white/10 hover:bg-white/20 transition flex items-center justify-between border border-white/15"
+                  >
+                    <div>
+                      <div className="font-extrabold text-sm text-white">108</div>
+                      <div className="text-[10.5px] text-sky-200">Gujarat Emergency Medical & Ambulance</div>
+                    </div>
+                    <span className="text-xs bg-emerald-600 font-bold px-2.5 py-1 rounded-lg shadow-xs">Call</span>
+                  </a>
+                  <a
+                    href="tel:1077"
+                    className="p-3 rounded-xl bg-white/10 hover:bg-white/20 transition flex items-center justify-between border border-white/15"
+                  >
+                    <div>
+                      <div className="font-extrabold text-sm text-white">1077</div>
+                      <div className="text-[10.5px] text-sky-200">District Disaster Control Room</div>
+                    </div>
+                    <span className="text-xs bg-sky-600 font-bold px-2.5 py-1 rounded-lg shadow-xs">Call</span>
+                  </a>
+                  <a
+                    href="tel:1070"
+                    className="p-3 rounded-xl bg-white/10 hover:bg-white/20 transition flex items-center justify-between border border-white/15"
+                  >
+                    <div>
+                      <div className="font-extrabold text-sm text-white">1070</div>
+                      <div className="text-[10.5px] text-sky-200">Gujarat State Disaster Mgmt (GSDMA)</div>
+                    </div>
+                    <span className="text-xs bg-sky-600 font-bold px-2.5 py-1 rounded-lg shadow-xs">Call</span>
+                  </a>
+                </div>
               </div>
 
               {/* Recent Reports Overview */}
@@ -683,13 +958,13 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                 <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                   <div className="flex items-center gap-2">
                     <span className="text-base">📋</span>
-                    <h3 className="text-sm font-bold text-slate-800">Your Recent Disaster Reports</h3>
+                    <h3 className="text-sm font-bold text-slate-800">{t.recentActivityTitle}</h3>
                   </div>
                   <button
                     onClick={() => setActiveTab("reports")}
                     className="text-xs font-semibold text-sky-700 hover:text-sky-800 cursor-pointer"
                   >
-                    View All ({myReports.length}) →
+                    {t.tabMyReports} ({myReports.length}) →
                   </button>
                 </div>
 
@@ -698,7 +973,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                 ) : myReports.length === 0 ? (
                   <div className="py-8 text-center space-y-2">
                     <div className="text-3xl">📭</div>
-                    <div className="text-xs font-semibold text-slate-600">No reports submitted yet</div>
+                    <div className="text-xs font-semibold text-slate-600">{t.noReportsYet}</div>
                     <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
                       When you submit a report for floods, cyclones, or fires, its verification and response telemetry will appear here.
                     </p>
@@ -706,7 +981,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                       onClick={() => setActiveTab("report")}
                       className="mt-2 text-xs font-bold text-sky-700 hover:text-sky-800 underline cursor-pointer"
                     >
-                      Submit your first report now
+                      {t.reportNow}
                     </button>
                   </div>
                 ) : (
@@ -748,13 +1023,13 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                 <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                   <div className="flex items-center gap-2">
                     <span className="text-base">⚠️</span>
-                    <h3 className="text-sm font-bold text-slate-800">Official Public Safety Alerts</h3>
+                    <h3 className="text-sm font-bold text-slate-800">{t.activeAdvisories}</h3>
                   </div>
                   <button
                     onClick={() => setActiveTab("safety")}
                     className="text-xs font-semibold text-sky-700 hover:text-sky-800 cursor-pointer"
                   >
-                    All Guidelines & Shelters →
+                    {t.tabSafety} →
                   </button>
                 </div>
 
@@ -786,10 +1061,10 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
             <div className="bg-white border border-slate-200/90 rounded-2xl p-5 md:p-7 shadow-xs">
               <div className="mb-5 pb-3 border-b border-slate-100">
                 <h2 className="text-base md:text-lg font-bold text-slate-900 flex items-center gap-2">
-                  <span>🚨</span> Report a Disaster Incident
+                  <span>🚨</span> {t.formTitle}
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Your report will be authenticated and dispatched directly to local SDRF, NDRF, and fire/EMS command units.
+                  {t.formSubtitle}
                 </p>
               </div>
 
@@ -798,7 +1073,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                   <div className="w-12 h-12 bg-emerald-600 text-white rounded-full flex items-center justify-center text-2xl mx-auto shadow-md">
                     ✓
                   </div>
-                  <h3 className="text-base font-bold text-emerald-900">Emergency Report Successfully Registered</h3>
+                  <h3 className="text-base font-bold text-emerald-900">{t.reportSuccessMsg}</h3>
                   <p className="text-xs text-emerald-700 max-w-md mx-auto">
                     Your report has been confirmed and stored in the Disaster Response Hub database.
                   </p>
@@ -816,7 +1091,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                       }}
                       className="bg-[#0c4a75] hover:bg-[#075985] text-white px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
                     >
-                      View in My Reports
+                      {t.tabMyReports}
                     </button>
                     <button
                       onClick={() => setSubmitResult(null)}
@@ -837,7 +1112,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                   {/* 1. Category Selection */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                      1. Disaster Category <span className="text-red-500">*</span>
+                      {t.selectDisasterType} <span className="text-red-500">*</span>
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {DISASTER_TYPES.map((dt) => (
@@ -853,7 +1128,13 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                         >
                           <span className="text-2xl">{dt.icon}</span>
                           <div>
-                            <div className="text-xs font-bold text-slate-900 leading-tight">{dt.title}</div>
+                            <div className="text-xs font-bold text-slate-900 leading-tight">
+                              {dt.type.includes("Flood")
+                                ? t.catFlood
+                                : dt.type.includes("Cyclone")
+                                ? t.catCyclone
+                                : t.catFire}
+                            </div>
                             <div className="text-[10px] text-slate-400">Emergency Priority</div>
                           </div>
                         </button>
@@ -864,12 +1145,12 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                   {/* 2. Description */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      2. Incident Description <span className="text-red-500">*</span>
+                      {t.disasterDescription} <span className="text-red-500">*</span>
                     </label>
                     <textarea
                       value={formDescription}
                       onChange={(e) => setFormDescription(e.target.value)}
-                      placeholder="Detail what is happening (e.g., Water rising above 4ft, several families stranded on rooftops, no electricity)..."
+                      placeholder={t.disasterDescPlaceholder}
                       rows={3}
                       className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-xs focus:outline-none focus:border-sky-600 focus:bg-white text-slate-900 transition"
                       required
@@ -884,13 +1165,13 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                        3. Location / Landmark <span className="text-red-500">*</span>
+                        {t.locationDetails} <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="text"
                         value={formLocation}
                         onChange={(e) => setFormLocation(e.target.value)}
-                        placeholder="e.g., Sector 14 Metro Station, Near Civil Hospital"
+                        placeholder={t.locationPlaceholder}
                         className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs focus:outline-none focus:border-sky-600 focus:bg-white text-slate-900 transition"
                         required
                       />
@@ -899,27 +1180,39 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
                         <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                          GPS Coordinates
+                          {t.gpsCoordinates}
                         </label>
                         <button
                           type="button"
                           onClick={() => {
-                            if (navigator.geolocation) {
-                              navigator.geolocation.getCurrentPosition(
-                                (pos) => {
+                            setGpsError(null);
+                            if (!navigator.geolocation) {
+                              setGpsError("This browser cannot share your location. Pick the spot on the map instead.");
+                              return;
+                            }
+                            navigator.geolocation.getCurrentPosition(
+                              (pos) => {
+                                if (isInGujarat(pos.coords.latitude, pos.coords.longitude)) {
                                   setFormLat(pos.coords.latitude);
                                   setFormLon(pos.coords.longitude);
-                                },
-                                () => alert("Could not access location."),
-                                { enableHighAccuracy: true, timeout: 5000 }
-                              );
-                            }
+                                } else {
+                                  setGpsError("Your location is outside Gujarat State boundaries. Pick the spot on the map instead.");
+                                }
+                              },
+                              () => setGpsError("Could not access your location. Allow location access or pick the spot on the map."),
+                              { enableHighAccuracy: true, timeout: 5000 }
+                            );
                           }}
                           className="text-[10px] text-sky-700 hover:underline font-bold cursor-pointer"
                         >
-                          📍 Detect My GPS
+                          📍 {t.getGpsBtn}
                         </button>
                       </div>
+                      {gpsError && (
+                        <p role="alert" className="mb-1.5 text-[11px] font-semibold text-red-600">
+                          {gpsError}
+                        </p>
+                      )}
                       <div className="grid grid-cols-2 gap-2">
                         <input
                           type="number"
@@ -945,7 +1238,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                        Estimated Affected People
+                        {t.peopleAffected}
                       </label>
                       <input
                         type="number"
@@ -961,30 +1254,46 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                   {/* Urgent Needs Checkboxes */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                      Urgent Supplies / Equipment Needed
+                      {t.urgentNeeds}
                     </label>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {URGENT_NEEDS_OPTIONS.map((need) => (
-                        <label
-                          key={need}
-                          className={`p-2.5 rounded-xl border text-xs cursor-pointer flex items-center gap-2 transition select-none ${
-                            formNeeds.includes(need)
-                              ? "bg-sky-50 border-sky-500 text-sky-900 font-bold"
-                              : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={formNeeds.includes(need)}
-                            onChange={(e) => {
-                              if (e.target.checked) setFormNeeds([...formNeeds, need]);
-                              else setFormNeeds(formNeeds.filter((n) => n !== need));
-                            }}
-                            className="rounded text-sky-600"
-                          />
-                          <span>{need}</span>
-                        </label>
-                      ))}
+                      {URGENT_NEEDS_OPTIONS.map((need) => {
+                        const needLabel =
+                          need === "Rescue Boats"
+                            ? t.needBoats
+                            : need === "Medical Evacuation"
+                            ? t.needMedical
+                            : need === "Drinking Water"
+                            ? t.needWater
+                            : need === "Temporary Shelter"
+                            ? t.needShelter
+                            : need === "Water Tenders (Fire)"
+                            ? t.needFireTenders
+                            : need === "Power Grid Cutoff"
+                            ? t.needPowerCutoff
+                            : need;
+                        return (
+                          <label
+                            key={need}
+                            className={`p-2.5 rounded-xl border text-xs cursor-pointer flex items-center gap-2 transition select-none ${
+                              formNeeds.includes(need)
+                                ? "bg-sky-50 border-sky-500 text-sky-900 font-bold"
+                                : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={formNeeds.includes(need)}
+                              onChange={(e) => {
+                                if (e.target.checked) setFormNeeds([...formNeeds, need]);
+                                else setFormNeeds(formNeeds.filter((n) => n !== need));
+                              }}
+                              className="rounded text-sky-600"
+                            />
+                            <span>{needLabel}</span>
+                          </label>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -998,12 +1307,12 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                       {submitting ? (
                         <>
                           <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          <span>Persisting Report to Hub...</span>
+                          <span>{t.submitting}</span>
                         </>
                       ) : (
                         <>
                           <span>🚨</span>
-                          <span>Submit Emergency Disaster Report</span>
+                          <span>{t.submitReportBtn}</span>
                         </>
                       )}
                     </button>
@@ -1089,6 +1398,9 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                           </div>
                         </div>
 
+                        {/* Reply to a dispatcher's information request (issue #99); shown without expanding */}
+                        <InformationRequestReply report={report} onReplied={handleRefresh} theme="light" className="mx-4 mb-4" />
+
                         {/* Expandable Details */}
                         {isExpanded && (
                           <div className="px-4 pb-4 pt-1 bg-slate-50/70 border-t border-slate-100 space-y-3 text-xs">
@@ -1159,7 +1471,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
               <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs">
                 <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
                   <span className="text-base">⚠️</span>
-                  <h3 className="text-sm font-bold text-slate-900">Official Meteorological & Flood Advisories</h3>
+                  <h3 className="text-sm font-bold text-slate-900">{t.activeAdvisories}</h3>
                 </div>
 
                 {publicAlerts.length === 0 ? (
@@ -1187,40 +1499,88 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
               <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs">
                 <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
                   <span className="text-base">📖</span>
-                  <h3 className="text-sm font-bold text-slate-900">Emergency Response Guidelines</h3>
+                  <h3 className="text-sm font-bold text-slate-900">{t.dosAndDonts}</h3>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                   <div className="p-4 rounded-xl bg-sky-50 border border-sky-100">
                     <h4 className="font-bold text-xs text-sky-900 flex items-center gap-1.5 mb-2">
-                      <span>🌊</span> Flash Flooding
+                      <span>🌊</span> {t.catFlood}
                     </h4>
                     <ul className="text-[11px] text-sky-800 space-y-1 list-disc list-inside">
-                      <li>Move immediately to upper stories or high ground.</li>
-                      <li>Never attempt to walk or drive across flooded bridges.</li>
-                      <li>Turn off main gas and electric supplies.</li>
+                      {lang === "gu" ? (
+                        <>
+                          <li>તાત્કાલિક ઊંચા માળ અથવા સલામત ઊંચા સ્થળે પહોંચો.</li>
+                          <li>પૂરના પાણીમાં ચાલવાનો કે વાહન ચલાવવાનો પ્રયાસ ન કરો.</li>
+                          <li>ઘરનું મુખ્ય વીજળી કનેક્શન અને ગેસ સપ્લાય બંધ કરો.</li>
+                        </>
+                      ) : lang === "hi" ? (
+                        <>
+                          <li>तुरंत ऊपरी मंजिल या ऊंचे सुरक्षित स्थान पर जाएं।</li>
+                          <li>बाढ़ के पानी में पैदल चलने या गाड़ी चलाने का प्रयास न करें।</li>
+                          <li>घर का मुख्य बिजली स्विच और गैस आपूर्ति बंद करें।</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>Move immediately to upper stories or high ground.</li>
+                          <li>Never attempt to walk or drive across flooded bridges.</li>
+                          <li>Turn off main gas and electric supplies.</li>
+                        </>
+                      )}
                     </ul>
                   </div>
 
                   <div className="p-4 rounded-xl bg-violet-50 border border-violet-100">
                     <h4 className="font-bold text-xs text-violet-900 flex items-center gap-1.5 mb-2">
-                      <span>🌀</span> Cyclone / Heavy Storm
+                      <span>🌀</span> {t.catCyclone}
                     </h4>
                     <ul className="text-[11px] text-violet-800 space-y-1 list-disc list-inside">
-                      <li>Stay inside away from windows and glass facades.</li>
-                      <li>Store 3 days of clean drinking water in sealed containers.</li>
-                      <li>Disconnect non-essential electrical devices.</li>
+                      {lang === "gu" ? (
+                        <>
+                          <li>બારીઓ અને કાચના દરવાજાથી દૂર મકાનની અંદર રહો.</li>
+                          <li>ઓછામાં ઓછું 3 દિવસનું પીવાનું સ્વચ્છ પાણી સંગ્રહ કરો.</li>
+                          <li>બિનજરૂરી વીજ ઉપકરણો બંધ રાખો અને મોબાઈલ ચાર્જ રાખો.</li>
+                        </>
+                      ) : lang === "hi" ? (
+                        <>
+                          <li>खिड़कियों और कांच के दरवाजों से दूर सुरक्षित रहें।</li>
+                          <li>कम से कम 3 दिनों के लिए स्वच्छ पीने का पानी रखें।</li>
+                          <li>बिजली के उपकरण बंद रखें और मोबाइल चार्ज रखें।</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>Stay inside away from windows and glass facades.</li>
+                          <li>Store 3 days of clean drinking water in sealed containers.</li>
+                          <li>Disconnect non-essential electrical devices.</li>
+                        </>
+                      )}
                     </ul>
                   </div>
 
                   <div className="p-4 rounded-xl bg-amber-50 border border-amber-100">
                     <h4 className="font-bold text-xs text-amber-900 flex items-center gap-1.5 mb-2">
-                      <span>🔥</span> Building Fire Safety
+                      <span>🔥</span> {t.catFire}
                     </h4>
                     <ul className="text-[11px] text-amber-800 space-y-1 list-disc list-inside">
-                      <li>Crawl low under smoke toward marked fire stairs.</li>
-                      <li>Never use elevators during emergency alarms.</li>
-                      <li>Cover mouth with damp cloth to filter toxic smoke.</li>
+                      {lang === "gu" ? (
+                        <>
+                          <li>ધૂમાડાથી બચવા નીચે નમીને ફાયર સીડી તરફ આગળ વધો.</li>
+                          <li>આગ સમયે લિફ્ટનો ઉપયોગ ક્યારેય ન કરવો, માત્ર સીડી વાપરો.</li>
+                          <li>ઝેરી ધૂમાડાથી બચવા ભીના કપડાથી મોં અને નાક ઢાંકો.</li>
+                        </>
+                      ) : lang === "hi" ? (
+                        <>
+                          <li>धुएं से बचने के लिए नीचे झुककर आपातकालीन सीढ़ियों की ओर बढ़ें।</li>
+                          <li>आग लगने पर कभी भी लिफ्ट का उपयोग न करें, केवल सीढ़ियां लें।</li>
+                          <li>विषाक्त धुएं को रोकने के लिए मुंह को गीले कपड़े से ढकें।</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>Crawl low under smoke toward marked fire stairs.</li>
+                          <li>Never use elevators during emergency alarms.</li>
+                          <li>Cover mouth with damp cloth to filter toxic smoke.</li>
+                        </>
+                      )}
                     </ul>
                   </div>
                 </div>
@@ -1231,14 +1591,14 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                 <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                   <div className="flex items-center gap-2">
                     <span className="text-base">🏥</span>
-                    <h3 className="text-sm font-bold text-slate-900">Designated Relief Shelters & Facilities</h3>
+                    <h3 className="text-sm font-bold text-slate-900">{t.reliefShelters}</h3>
                   </div>
                   <span className="text-xs text-slate-400">{shelters.length} locations</span>
                 </div>
 
                 {shelters.length === 0 ? (
                   <div className="py-6 text-center text-xs text-slate-400">
-                    No public shelter capacity telemetry available.
+                    {t.noSheltersFound}
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
@@ -1259,11 +1619,13 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                         <div className="text-[11px] text-slate-500">{shelter.address}</div>
                         <div className="mt-2.5 pt-2 border-t border-slate-200/70 flex items-center justify-between text-[11px]">
                           <div>
-                            Available Space:{" "}
+                            {t.capacityLabel}:{" "}
                             <b className="text-slate-800">{shelter.available_beds ?? shelter.total_capacity ?? "Open"}</b>
                           </div>
                           {shelter.contact_number && (
-                            <span className="text-sky-700 font-semibold">📞 {shelter.contact_number}</span>
+                            <a href={`tel:${shelter.contact_number}`} className="text-sky-700 font-semibold hover:underline">
+                              📞 {shelter.contact_number}
+                            </a>
                           )}
                         </div>
                       </div>
@@ -1285,9 +1647,9 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                 </div>
                 <div>
                   <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                    Active Disasters Near You
+                    {t.liveMapTitle}
                   </h3>
-                  <p className="text-[10px] text-slate-400">NDMA & State Command Telemetry</p>
+                  <p className="text-[10px] text-slate-400">Gujarat SEOC & NDMA Feeds</p>
                 </div>
               </div>
               <span className="text-[10px] font-bold bg-sky-950/90 text-sky-400 border border-sky-500/50 px-2.5 py-0.5 rounded-full ring-1 ring-sky-500/30">
@@ -1304,12 +1666,12 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
                 <div className="absolute inset-0 bg-[#0b1324]/95 flex flex-col items-center justify-center p-4 text-center z-10 border border-sky-500/20">
                   <div className="text-3xl mb-1">✅</div>
                   <div className="text-xs font-bold text-sky-200">No active disasters reported in this area.</div>
-                  <p className="text-[10px] text-slate-400 mt-1">All monitored regional zones are currently normal.</p>
+                  <p className="text-[10px] text-slate-400 mt-1">All monitored regional zones in Gujarat are normal.</p>
                 </div>
               )}
             </div>
 
-            {/* Compact Incident List Summary (matching login preset button styling) */}
+            {/* Compact Incident List Summary */}
             <div className="mt-3.5 space-y-2">
               <div className="text-[10.5px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
                 <span>Confirmed Emergency Incidents</span>
@@ -1353,7 +1715,7 @@ export const CitizenDashboardView: React.FC<CitizenDashboardViewProps> = ({
 
       {/* ─── Footer ─── */}
       <footer className="py-4 text-center text-xs text-slate-500 border-t border-slate-200 bg-white mt-auto">
-        ResQ AI Disaster Coordination Hub • Official Citizen Portal • Confidential & Secure
+        ResQ AI Disaster Coordination Hub • Official Gujarat Citizen Portal • Confidential & Secure
       </footer>
     </div>
   );

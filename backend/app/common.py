@@ -1,5 +1,7 @@
 """Shared types and helpers for the Disaster Management API."""
 
+import logging
+import threading
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, Query
@@ -82,6 +84,37 @@ def notify(conn, *, user_id, event_code: str, title: str, body: str, related_id=
         """,
         (user_id, event_code, title[:200], body, related_id),
     )
+    _email_copy(conn, user_id, title, body)
+
+
+def _email_copy(conn, user_id, title: str, body: str) -> None:
+    """Send an email copy to a citizen who has email alerts on, without ever failing or slowing the caller.
+
+    Sent from a short-lived background thread; any error is logged and dropped. Staff and field
+    accounts never get these, and in-app stays the source of truth.
+    """
+    try:
+        row = conn.execute(
+            """
+            SELECT u.email, u.full_name, u.alert_preferences
+            FROM users u JOIN roles r ON r.role_id = u.role_id
+            WHERE u.user_id = %s AND r.code = 'NORMAL_USER' AND u.status = 'ACTIVE'
+            """,
+            (user_id,),
+        ).fetchone()
+        if row is None or not (row["alert_preferences"] or {}).get("email", True):
+            return
+        from app import db
+        from app.services import email as email_service
+
+        # Only after the commit: a rolled-back action must never produce an email about it.
+        db.after_commit(conn, lambda: threading.Thread(
+            target=email_service.send_notification_email,
+            args=(row["email"], row["full_name"], title, body),
+            daemon=True,
+        ).start())
+    except Exception:  # notifying by email must never break the action that triggered it
+        logging.getLogger("drch.email").warning("Could not queue the email copy of a notification", exc_info=True)
 
 
 def next_incident_ref(conn) -> str:

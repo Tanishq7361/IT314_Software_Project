@@ -5,7 +5,7 @@ import { CitizenDashboardClient } from "./client-view";
 export default async function CitizenDashboardPage() {
   const user = await currentUser();
   if (!user || user.role !== "NORMAL_USER") {
-    redirect("/login");
+    redirect("/login?next=/citizen/dashboard");
   }
 
   return (
@@ -14,6 +14,7 @@ export default async function CitizenDashboardPage() {
         id: user.user_id,
         name: user.full_name || "Citizen",
         phone: "",
+        email: user.email || "",
       }}
     />
   );

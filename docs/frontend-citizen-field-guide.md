@@ -1,4 +1,4 @@
-# ResQ Gujarat — Frontend Operations & Accessibility Runbook (S3-16)
+# ResQ Gujarat — Frontend Operations & Accessibility Runbook
 
 **Document Version:** 1.0.0  
 **Author / Component Lead:** Janvi Patel (`JanviVPatel`) — Frontend Lead (Citizen & Field Responder Interfaces)  
@@ -65,7 +65,7 @@ flowchart TD
 | **3** | `DISPATCHED` | Purple Badge | Field team assigned and mobilized toward scene. |
 | **4** | `RESOLVED` / `CLOSED` | Emerald / Slate Badge | Emergency cleared, casualties assisted, incident closed. |
 
-### 4.3 Citizen Information Reply (SRS S2-13)
+### 4.3 Citizen Information Reply
 When dispatchers flag an incident as `NEEDS_INFORMATION`, the report card dynamically surfaces a high-visibility orange response banner. Citizens can provide additional details (e.g., landmark directions, stranded counts), instantly pushing data back into the dispatcher's triage view.
 
 ---
@@ -96,7 +96,7 @@ stateDiagram-v2
 
 ---
 
-## 6. Payment Endings (`/donate`, S3-11)
+## 6. Payment Endings (`/donate`)
 
 After an order is created the donation page can end in one of four states. Each failure state names the order and amount, says whether money moved, and offers a next step. Focus moves to the state heading when it appears, and errors that stay on the order screen use `role="alert"`.
 
@@ -136,6 +136,8 @@ Checked in a browser at **375 px width** (the "mobile" preset): `/donate`, `/fie
 
 - **Touch targets:** primary actions on `/field`, `/my-reports` and `/donate` are at least 44 px tall (`min-h-11` or `min-h-[44px]`); the main field actions use `min-h-12` (48 px).
 - **Layout:** grids stack to one column on narrow screens (`grid-cols-1 sm:grid-cols-2`), headers wrap instead of overflowing, and the timeline connectors only show from `sm` up.
+- **Page scrolling:** the document scrolls normally. Only `/` (map) and the `/dm` workspace use the fixed full-screen `.app-screen` layout, and the `/dm` workspace scrolls inside its own pane. Do not set `overflow:hidden` or `100vh` on `body`.
+- **Shared header:** every page uses `SiteHeader` / `NavLink` from `components/Brand.tsx` (56 px bar, header links at least 44 px tall). The map header collapses secondary links into a menu below `lg`.
 - **Containers:** page content is centred with `max-w-4xl` or `max-w-5xl` on wide screens.
 
 ---

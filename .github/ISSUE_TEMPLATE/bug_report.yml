@@ -7,12 +7,50 @@ body:
     attributes:
       value: |
         Please use this form for software defects. **Do not include real emergency reports, personal information, credentials, or other sensitive data. This repository is not an emergency reporting channel.**
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where does the problem occur?
+      options:
+        - Citizen reporting
+        - Public map
+        - Dispatcher console (/dm)
+        - Field team
+        - Authentication / roles
+        - Ingestion / alerts
+        - Payments / donations
+        - AI triage
+        - Database / migrations
+        - CI/CD / deployment
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (data exposure, wrong dispatch, outage)
+        - Major (feature broken, no workaround)
+        - Minor (workaround exists)
+        - Cosmetic
+    validations:
+      required: true
   - type: textarea
     id: summary
     attributes:
       label: What happened?
-      description: Describe the issue and what you expected to happen.
+      description: Describe the problem as observed.
       placeholder: A concise description of the unexpected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
     validations:
       required: true
   - type: textarea
@@ -31,7 +69,7 @@ body:
     attributes:
       label: Environment
       description: Include relevant versions and whether this occurred locally or in a deployment.
-      placeholder: Browser/OS, frontend/backend version or commit, and deployment environment.
+      placeholder: Browser/OS, frontend/backend version or commit, and deployment environment (local, staging, production).
     validations:
       required: false
   - type: textarea
@@ -41,3 +79,10 @@ body:
       description: Remove secrets, tokens, personal information, and real incident data before sharing.
     validations:
       required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: This report contains no secrets, credentials, personal information, or real emergency-report data.
+          required: true

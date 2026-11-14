@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { SiteHeader } from "@/components/Brand";
 import { signOut } from "@/app/login/actions";
 import { currentUser } from "@/lib/session";
 
@@ -28,25 +29,13 @@ export default async function FieldLayout({ children }: { children: ReactNode })
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur px-4 py-3 sm:px-6">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex size-3 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-emerald-500">Field Responder</span>
-                <span className="text-xs text-muted">| {user.full_name}</span>
-              </div>
-              <h1 className="text-base font-semibold leading-none sm:text-lg">ResQ Field Ops</h1>
-            </div>
-          </div>
-          <form action={signOut}>
-            <button className="min-h-11 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-surface-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 cursor-pointer">
-              Sign out
-            </button>
-          </form>
-        </div>
-      </header>
+      <SiteHeader subtitle={`Field Ops · ${user.full_name}`} brandHref="/field" maxWidth="max-w-4xl">
+        <form action={signOut}>
+          <button className="min-h-11 cursor-pointer rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300">
+            Sign out
+          </button>
+        </form>
+      </SiteHeader>
       <main className="mx-auto max-w-4xl p-4 sm:p-6">{children}</main>
     </div>
   );

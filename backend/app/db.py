@@ -1,7 +1,8 @@
 """PostgreSQL connection pool and transaction helper (psycopg 3)."""
 
 import json
-from collections.abc import Iterator
+import logging
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from psycopg import Connection
@@ -41,8 +42,37 @@ def close_pool() -> None:
         _pool = None
 
 
+# Work that must only happen once a transaction has really committed (emails, for example),
+# keyed by the connection that transaction() handed out.
+_after_commit: dict[int, list[Callable[[], None]]] = {}
+
+
+def after_commit(conn: Connection, callback: Callable[[], None]) -> None:
+    """Run `callback` after the current transaction() on `conn` commits; drop it on rollback.
+
+    A connection that did not come from transaction() (a test or CLI connection) runs it at once.
+    """
+    pending = _after_commit.get(id(conn))
+    if pending is None:
+        callback()
+    else:
+        pending.append(callback)
+
+
 @contextmanager
 def transaction() -> Iterator[Connection]:
     """One connection, one transaction: commits on success, rolls back on any exception."""
-    with get_pool().connection(timeout=10.0) as conn, conn.transaction():
-        yield conn
+    with get_pool().connection(timeout=10.0) as conn:
+        _after_commit[id(conn)] = []
+        try:
+            with conn.transaction():
+                yield conn
+            pending = _after_commit.pop(id(conn), [])
+        except BaseException:
+            _after_commit.pop(id(conn), None)
+            raise
+    for callback in pending:
+        try:
+            callback()
+        except Exception:  # after-commit work must never turn a committed request into an error
+            logging.getLogger("drch.db").warning("An after-commit callback failed", exc_info=True)

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from psycopg import sql
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from app import audit, db
 from app.auth import DMUser
@@ -23,6 +24,7 @@ from app.services.incidents import (
     lock_incident,
     update_incident,
 )
+from app.uploads import read_capped_body, safe_filename, sniff_image_type
 
 router = APIRouter()
 
@@ -256,83 +258,30 @@ def decide_recommendation(
     return result
 
 
-_IMAGE_CLASS_MAPPING: dict[str, str | None] = {
+# --------------------------------------------------------------------------- advisory photo analysis (S3-08)
+
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+# Image classes that map onto one of the three supported scenarios. Every other class gives no scenario.
+_IMAGE_CLASS_MAPPING: dict[str, str] = {
     "fire": "industrial_fire",
     "flood": "urban_flooding",
     "hurricane": "cyclone",
-    "earthquake": "earthquake",
-    "landslide": None,
-    "other_disaster": None,
-    "not_disaster": None,
 }
+# Real disasters the platform does not support: shown as out of scope, never mapped to a scenario.
+_OUT_OF_SCOPE_IMAGE_CLASSES = {"earthquake", "landslide", "other_disaster"}
 
 
-@router.post("/incidents/{incident_id}/photo-analyse")
-async def analyze_incident_photo(
-    incident_id: uuid.UUID,
-    request: Request,
-    principal: DMUser,
-):
-    content_type = request.headers.get("content-type", "")
-    ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
-    base_type = content_type.split(";")[0].strip().lower()
-    filename = request.headers.get("x-filename", "photo.jpg")
-
-    if base_type not in ALLOWED_IMAGE_TYPES and not base_type.startswith("multipart/form-data"):
-        raise ApiError(
-            415,
-            "UNSUPPORTED_MEDIA_TYPE",
-            f"Unsupported image type '{content_type}'. Use JPEG, PNG or WebP.",
-        )
+def _load_open_incident(incident_id: uuid.UUID) -> None:
     with db.transaction() as conn:
-        row = conn.execute(
-            "SELECT * FROM incidents WHERE incident_id = %s", (incident_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM incidents WHERE incident_id = %s", (incident_id,)).fetchone()
         if row is None:
             raise not_found("Incident")
         ensure_open(row)
 
-    content = await request.body()
-    if len(content) > 10 * 1024 * 1024:
-        raise ApiError(413, "FILE_TOO_LARGE", "Image file exceeds 10 MB limit.")
 
-    ai_image_url = os.getenv("AI_IMAGE_SERVICE_URL")
-    prediction = None
-    confidence = 0.0
-    needs_review = False
-    top3 = []
-
-    if ai_image_url:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    f"{ai_image_url.rstrip('/')}/predict",
-                    files={"file": (filename, content, base_type)},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    prediction = data.get("prediction")
-                    confidence = float(data.get("confidence", 0.0))
-                    needs_review = bool(data.get("needs_review", False))
-                    top3 = data.get("top3", [])
-        except (httpx.HTTPError, OSError):
-            prediction = None
-
-    if prediction is None:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": {
-                    "code": "AI_PHOTO_UNAVAILABLE",
-                    "message": "Image analysis model is currently unavailable.",
-                    "details": None,
-                }
-            },
-        )
-
-    mapped_scenario = _IMAGE_CLASS_MAPPING.get(str(prediction).lower())
-    is_out_of_scope = str(prediction).lower() in ("landslide", "other_disaster")
-
+def _record_photo_analysis(principal, incident_id: uuid.UUID, filename: str, prediction: str, mapped, confidence: float) -> None:
     with db.transaction() as conn:
         audit.record(
             conn,
@@ -342,14 +291,51 @@ async def analyze_incident_photo(
             entity_id=incident_id,
             result="SUCCESS",
             rationale=f"Photo analysed: {prediction} ({confidence:.2f})",
-            after={
-                "filename": filename,
-                "prediction": prediction,
-                "suggested_scenario": mapped_scenario,
-                "confidence": confidence,
-            },
+            after={"filename": filename, "prediction": prediction, "suggested_scenario": mapped, "confidence": confidence},
             ip=principal.ip,
         )
+
+
+@router.post("/incidents/{incident_id}/photo-analyse")
+async def analyze_incident_photo(incident_id: uuid.UUID, request: Request, principal: DMUser):
+    """Advisory only: classify an uploaded scene photo. Nothing is stored on the incident and nothing is verified."""
+    declared_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if declared_type not in _ALLOWED_IMAGE_TYPES:
+        raise ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Send the photo as the request body with a JPEG, PNG or WebP content type.")
+    await run_in_threadpool(_load_open_incident, incident_id)
+
+    content = await read_capped_body(request, _MAX_IMAGE_BYTES)
+    image_type = sniff_image_type(content)
+    if image_type is None:
+        raise ApiError(415, "INVALID_IMAGE", "The file is not a JPEG, PNG or WebP image.")
+    filename = safe_filename(request.headers.get("x-filename"))
+
+    prediction: str | None = None
+    confidence = 0.0
+    needs_review = False
+    top3: list = []
+    ai_image_url = os.getenv("AI_IMAGE_SERVICE_URL")
+    if ai_image_url:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(f"{ai_image_url.rstrip('/')}/predict", files={"file": (filename, content, image_type)})
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_prediction = data.get("prediction")
+                prediction = raw_prediction if isinstance(raw_prediction, str) and raw_prediction.strip() else None
+                confidence = min(max(float(data.get("confidence", 0.0)), 0.0), 1.0)
+                needs_review = bool(data.get("needs_review", False))
+                raw_top3 = data.get("top3")
+                top3 = raw_top3[:3] if isinstance(raw_top3, list) else []
+        except (httpx.HTTPError, OSError, ValueError, TypeError, AttributeError):
+            prediction = None
+
+    if prediction is None:
+        raise ApiError(503, "AI_PHOTO_UNAVAILABLE", "Image analysis model is currently unavailable.")
+
+    key = prediction.strip().lower()
+    mapped_scenario = _IMAGE_CLASS_MAPPING.get(key)
+    await run_in_threadpool(_record_photo_analysis, principal, incident_id, filename, prediction, mapped_scenario, confidence)
 
     return {
         "status": "ANALYZED",
@@ -357,8 +343,9 @@ async def analyze_incident_photo(
         "prediction": prediction,
         "suggested_scenario": mapped_scenario,
         "confidence": confidence,
-        "is_out_of_scope": is_out_of_scope,
+        "is_out_of_scope": key in _OUT_OF_SCOPE_IMAGE_CLASSES,
+        "no_disaster_detected": key == "not_disaster",
         "needs_review": needs_review,
         "top3": top3,
-        "advisory_notice": "Advisory suggestion only — never stored as incident verification (S3-08).",
+        "advisory_notice": "Advisory suggestion only. It is not stored as incident verification; a dispatcher decides.",
     }

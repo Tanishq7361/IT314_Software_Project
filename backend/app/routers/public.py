@@ -161,3 +161,63 @@ def list_public_alerts():
             """
         ).fetchall()
     return rows
+
+
+class PublicSafetyContent(BaseModel):
+    content_id: str
+    scenario: str
+    title: str
+    body: str
+    source: str | None
+    version: int
+    published_at: datetime | None
+
+
+class PublicUpdate(BaseModel):
+    update_id: str
+    scenario: str
+    title: str
+    body: str
+    area_label: str | None
+    published_at: datetime | None
+
+
+@router.get(
+    "/safety-content",
+    response_model=list[PublicSafetyContent],
+    summary="Approved safety guidance published by dispatchers (NU-FR-08)",
+)
+def list_public_safety_content(scenario: Scenario | None = None):
+    """Only PUBLISHED guidance (approved by a publisher); drafts, approvals and superseded versions stay internal.
+    Author and approver names are never returned."""
+    query = (
+        "SELECT content_id::text AS content_id, lower(scenario::text) AS scenario, title, body, source, version, "
+        "published_at FROM safety_content WHERE status = 'PUBLISHED'"
+    )
+    params: dict = {}
+    if scenario:
+        query += " AND scenario = %(scenario)s::scenario_type"
+        params["scenario"] = scenario_db(scenario)
+    query += " ORDER BY scenario, title LIMIT 200"
+    with db.transaction() as conn:
+        return conn.execute(query, params).fetchall()
+
+
+@router.get(
+    "/updates",
+    response_model=list[PublicUpdate],
+    summary="Verified public updates published by dispatchers",
+)
+def list_public_updates(scenario: Scenario | None = None):
+    """Only PUBLISHED broadcast updates. No incident link, author or internal notes."""
+    query = (
+        "SELECT update_id::text AS update_id, lower(scenario::text) AS scenario, title, body, area_label, "
+        "published_at FROM public_updates WHERE status = 'PUBLISHED'"
+    )
+    params: dict = {}
+    if scenario:
+        query += " AND scenario = %(scenario)s::scenario_type"
+        params["scenario"] = scenario_db(scenario)
+    query += " ORDER BY published_at DESC NULLS LAST LIMIT 50"
+    with db.transaction() as conn:
+        return conn.execute(query, params).fetchall()

@@ -257,6 +257,5 @@ documents/
 .ai/reports/
 .ai/handoffs/
 
-
-
-
+# 10. Certain Personal files to keep ignored
+docs/sprints/remaining-work.md

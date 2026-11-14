@@ -10,6 +10,7 @@ interface CitizenDashboardClientProps {
     id: string;
     name: string;
     phone?: string;
+    email?: string;
   };
 }
 
@@ -20,6 +21,7 @@ export function CitizenDashboardClient({ user }: CitizenDashboardClientProps) {
     <CitizenDashboardView
       currentUser={user}
       onViewPublicMap={() => router.push("/")}
+      onOpenCitizenReport={() => router.push("/report")}
       onSignOut={async () => {
         await signOut();
       }}

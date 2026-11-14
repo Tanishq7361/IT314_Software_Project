@@ -14,6 +14,8 @@ import httpx
 from app import db
 from app.config import get_settings
 from app.services.ingest.base import Adapter
+from app.services.ingest.bluesky import BlueskySearchAdapter
+from app.services.ingest.news import GoogleNewsAdapter
 from app.services.ingest.sachet import SachetAdapter
 from app.services.ingest.signals import ReplaySignalAdapter
 from app.services.ingest.usgs import UsgsAdapter
@@ -41,7 +43,21 @@ def registered_adapters(settings=None) -> list[Adapter]:
         SachetAdapter(settings.sachet_feed_url),
         UsgsAdapter(settings.usgs_feed_url),
         ReplaySignalAdapter(settings.social_replay_file),
+        GoogleNewsAdapter(),
+        BlueskySearchAdapter(settings.bluesky_search_url),
     ]
+
+
+def _disabled_reason(adapter: Adapter, settings) -> str | None:
+    if adapter.name == "SACHET" and not settings.sachet_feed_url:
+        return "SACHET feed URL is not configured."
+    if adapter.name == "USGS" and not settings.usgs_feed_url:
+        return "USGS feed URL is not configured."
+    if adapter.name == "GNEWS" and not settings.news_rss_enabled:
+        return "GNEWS is disabled (set NEWS_RSS_ENABLED=true)."
+    if adapter.name == "BLUESKY" and not settings.bluesky_search_enabled:
+        return "BLUESKY is disabled (set BLUESKY_SEARCH_ENABLED=true)."
+    return None
 
 
 def _prelabel(text: str, settings=None) -> tuple[str | None, float | None]:
@@ -219,12 +235,8 @@ def _run_adapter(adapter: Adapter, settings=None) -> IngestRunResult:
                 "INSERT INTO ingest_runs (run_id, source, status, started_at) VALUES (%s, %s, 'RUNNING', now())",
                 (run_id, adapter.name),
             )
-    configured = (settings or get_settings())
-    disabled = (adapter.name == "SACHET" and not configured.sachet_feed_url) or (
-        adapter.name == "USGS" and not configured.usgs_feed_url
-    )
-    if disabled:
-        message = f"{adapter.name} feed URL is not configured."
+    message = _disabled_reason(adapter, settings or get_settings())
+    if message:
         if has_db:
             with db.transaction() as conn:
                 conn.execute(

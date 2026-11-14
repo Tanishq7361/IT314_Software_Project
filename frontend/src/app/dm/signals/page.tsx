@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RelatedSignalsPanel, type RelatedSignalsResponse } from "@/components/dm/RelatedSignalsPanel";
 import { Badge, Button, Card, Dialog, EmptyState, ErrorState, Field, LoadingRows, PageHeader, Select, Textarea } from "@/components/ui";
 import { api, useQuery } from "@/lib/api";
 import { useStaff } from "../shell";
@@ -35,6 +36,17 @@ export default function SignalsPage() {
     limit: 100,
   });
 
+  // Advisory suggestions are searched server-side across ALL pending signals, not just the rows shown here.
+  const related = useQuery<RelatedSignalsResponse>(filterStatus === "PENDING" ? "signals/related" : null, { limit: 50 });
+  const relatedCount = new Map<string, number>();
+  for (const pair of related.data?.pairs ?? []) {
+    for (const id of [pair.signal_a.signal_id, pair.signal_b.signal_id]) relatedCount.set(id, (relatedCount.get(id) ?? 0) + 1);
+  }
+  const reloadAll = () => {
+    reload();
+    related.reload();
+  };
+
   // Action Dialog states
   const [promotingSignal, setPromotingSignal] = useState<SignalItem | null>(null);
   const [selectedScenario, setSelectedScenario] = useState<string>("urban_flooding");
@@ -67,7 +79,7 @@ export default function SignalsPage() {
         body: { scenario: selectedScenario },
       });
       setPromotingSignal(null);
-      reload();
+      reloadAll();
     } catch (err: unknown) {
       setPromoteError(err instanceof Error ? err.message : "Failed to promote signal");
     } finally {
@@ -96,7 +108,7 @@ export default function SignalsPage() {
         body: { rationale: dismissRationale.trim() },
       });
       setDismissingSignal(null);
-      reload();
+      reloadAll();
     } catch (err: unknown) {
       setDismissError(err instanceof Error ? err.message : "Failed to dismiss signal");
     } finally {
@@ -127,12 +139,16 @@ export default function SignalsPage() {
                 </button>
               ))}
             </div>
-            <Button size="sm" onClick={reload} busy={loading}>
+            <Button size="sm" onClick={reloadAll} busy={loading}>
               Refresh
             </Button>
           </div>
         }
       />
+
+      {filterStatus === "PENDING" && (
+        <RelatedSignalsPanel data={related.data} error={related.error} loading={related.loading} onRetry={related.reload} />
+      )}
 
       {error && !signals && <ErrorState message={error} onRetry={reload} />}
 
@@ -168,6 +184,11 @@ export default function SignalsPage() {
                       <span className="mt-1 inline-block rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono text-amber-500">
                         SIMULATED
                       </span>
+                    )}
+                    {relatedCount.has(sig.signal_id) && (
+                      <div className="mt-1">
+                        <Badge tone="ai">Possibly related ×{relatedCount.get(sig.signal_id)}</Badge>
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3 align-top max-w-md">

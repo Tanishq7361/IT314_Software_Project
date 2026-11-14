@@ -119,6 +119,8 @@ def analytics(
         "definitions": {
             "UNASSIGNED": "No human-assigned priority yet; counted separately, never guessed.",
             "out_of_scope": "AI suggested a type outside the three supported scenarios; staff triaged manually.",
+            "confidence_bands": "AI confidence at suggestion time: HIGH is 0.80 or more, MEDIUM is 0.60 to 0.79, LOW is below 0.60; "
+            "rows without a recorded confidence are UNKNOWN. UNDECIDED means no human decision yet.",
             "median_seconds_to_verify": "Median time from submission to a recorded verification.",
             "avg_ack_seconds": "Average time from dispatch request to a recorded acknowledgement.",
             "donations": "Confirmed amounts only count gateway-confirmed payments; pending is shown apart.",

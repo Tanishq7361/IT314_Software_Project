@@ -110,3 +110,14 @@ def test_staff_account_cannot_sign_in_with_google(client, make, google_configure
     assert resp.status_code == 403
     assert resp.json()["error"]["code"] == "GOOGLE_STAFF_NOT_ALLOWED"
     assert "access_token" not in resp.json()
+
+
+def test_google_only_account_is_told_to_set_a_password_first(client, make, sql):
+    citizen = make.citizen()
+    sql.execute("UPDATE user_auth SET password_hash = NULL WHERE user_id = %s", (citizen["user_id"],))
+    assert client.get("/api/v1/me/profile", headers=citizen["headers"]).json()["has_password"] is False
+    change = client.post("/api/v1/me/password", headers=citizen["headers"], json={"current_password": "x", "new_password": "Brand-new1!pass"})
+    assert change.status_code == 409 and change.json()["error"]["code"] == "NO_PASSWORD_SET"
+    delete = client.post("/api/v1/me/account/deletion", headers=citizen["headers"], json={"password": "x"})
+    assert delete.status_code == 409 and delete.json()["error"]["code"] == "NO_PASSWORD_SET"
+    assert client.get("/api/v1/me/profile", headers=citizen["headers"]).status_code == 200  # nothing changed, still signed in
